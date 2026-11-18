@@ -1,0 +1,52 @@
+name: Headway MT5 Demo Automation
+
+on:
+  workflow_dispatch:          # manual trigger
+  # Uncomment later if you want scheduled runs
+  # schedule:
+  #   - cron: '0 */2 * * *'   # every 2 hours
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npx playwright install chromium --with-deps
+
+      - name: Run Login (and optional Order)
+        env:
+          WEB_TERMINAL_URL: ${{ secrets.WEB_TERMINAL_URL }}
+          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+          HEADLESS: true
+          SLOW_MO: 60
+          DEFAULT_TIMEOUT: 60000
+        run: |
+          echo "Starting automation..."
+          npx ts-node src/index.ts --mode=login
+          # To also place a test order, change the line above to:
+          # npx ts-node src/index.ts --mode=order --side=buy
+
+      - name: Upload screenshots & artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-artifacts-${{ github.run_id }}
+          path: |
+            artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
