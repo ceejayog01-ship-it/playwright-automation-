@@ -1,9 +1,0 @@
-work/
-data/
-artifacts/
-signals_out.json
-__pycache__/
-.pytest_cache/
-node_modules/
-dist/
-.env
