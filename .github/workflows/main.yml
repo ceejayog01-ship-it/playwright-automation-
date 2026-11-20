@@ -1,0 +1,54 @@
+name: Headway Historical Chart Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chart-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ACCOUNT_MODE: demo
+      WEB_TERMINAL_URL: https://hw.online/webterminal/mt5-demo/
+      MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+      MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
+      HEADLESS: "true"
+      DEFAULT_TIMEOUT: "60000"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify required credentials
+        run: |
+          test -n "$MT5_LOGIN" || exit 1
+          test -n "$MT5_PASSWORD" || exit 1
+
+      - name: Run historical chart probe
+        run: npm run chartprobe
+
+      - name: Upload chart probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headway-chart-probe-evidence
+          path: artifacts/chart-probe/
+          if-no-files-found: warn
+          retention-days: 7
+          
