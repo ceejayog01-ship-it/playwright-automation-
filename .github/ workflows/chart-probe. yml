@@ -1,4 +1,4 @@
-name: Headway Historical Chart Probe
+cname: Headway Historical Chart Probe
 
 on:
   workflow_dispatch:
