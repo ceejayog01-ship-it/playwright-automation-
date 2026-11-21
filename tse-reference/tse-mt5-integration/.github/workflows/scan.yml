@@ -1,0 +1,96 @@
+name: TSE Scan → Signal Interface → Equivalence Audit
+
+# Every 30 minutes on weekdays, 2 minutes after each M30 bar closes.
+# Cheap gate decides whether anything can happen (session open).
+# Liberatti is completely removed. No always-on VPS.
+
+on:
+  schedule:
+    - cron: "2,32 * * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = demonstration only (default). Live order routing is out of scope of this workflow."
+        required: false
+        default: "true"
+      force_scan:
+        description: "Ignore the session filter (testing)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: tse-scan-signal-interface
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan-and-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DRY_RUN: ${{ github.event.inputs.dry_run || vars.KB_DRY_RUN || 'true' }}
+      KB_FORCE_SCAN: ${{ github.event.inputs.force_scan || 'false' }}
+      KB_STATE_DIR: state
+      KB_AUDIT_DIR: audit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gate (is anything possible right now?)
+        id: gate
+        run: python3 session_gate.py
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.active == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        if: steps.gate.outputs.active == 'true'
+        run: |
+          pip install -r requirements.txt
+          pip install -e . || true
+
+      - name: Scan (51 BEST strategies → Telegram + Signal Output Interface)
+        if: steps.gate.outputs.active == 'true'
+        env:
+          KB_PAIRS: ${{ vars.KB_PAIRS || 'XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD' }}
+          KB_EXEC_PAIRS: ${{ vars.KB_EXEC_PAIRS || 'EURUSD' }}
+          KB_DESIGNS: ${{ vars.KB_DESIGNS || 'A,B' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python scan_once.py || true
+
+      - name: Demonstration executor + Signal Receiver (canonical path)
+        if: steps.gate.outputs.active == 'true'
+        run: python mt5_execute.py
+
+      - name: Permanent signal-equivalence audit
+        if: steps.gate.outputs.active == 'true'
+        run: pytest tests/ -v --tb=short || true
+
+      - name: Save state & audit artefacts
+        if: steps.gate.outputs.active == 'true' && always()
+        run: |
+          mkdir -p state audit
+          git config user.name "tse-bot"
+          git config user.email "tse-bot@users.noreply.github.com"
+          git add state/ audit/ || true
+          git diff --staged --quiet || git commit -m "chore: state + audit $(date -u +%Y-%m-%dT%H:%MZ)" || true
+          git pull --rebase || true
+          git push || true
+
+      - name: Upload audit artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tse-audit-${{ github.sha }}
+          path: |
+            state/
+            audit/
+            signals_out.json
+          retention-days: 14
+          if-no-files-found: ignore

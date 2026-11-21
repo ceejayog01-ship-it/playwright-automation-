@@ -1,0 +1,32 @@
+name: Watchdog (is the pipeline alive?)
+
+# Fails (and so emails you) if no cycle heartbeat reached Supabase in the last 50 minutes while the FX market is open.
+on:
+  schedule:
+    - cron: "20,50 * * * *"
+    - cron: "40 3 * * *"          # daily: full integrity check of the remote audit chain
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Remote audit-chain integrity (daily)
+        if: github.event.schedule == '40 3 * * *' || github.event_name == 'workflow_dispatch'
+        working-directory: bridge
+        run: python -m tsebridge.supabase_sync verify-remote
+
+      - name: Heartbeat age
+        working-directory: bridge
+        run: python -m tsebridge.supabase_sync watchdog --max-age-min 50

@@ -1,0 +1,135 @@
+name: Headway terminal tools (manual)
+
+# Manual, on-demand (NOT scheduled - the scheduled pipeline is market-cycle.yml): verify the login, read quotes, native M30 history, probe the terminal's data feeds,
+# or run the guarded DUMMY order. Orders are a dry run unless "execute" is ticked.
+# Real account: pick account_mode=real. The job then uses the GitHub Environment "real-account" -
+# add required reviewers to that environment to get a manual approval gate before any real-account run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        type: choice
+        options: [login, quotes, history, sample, ticks, probe, order, monitor]
+        default: quotes
+      account_mode:
+        description: "demo (default) or real"
+        type: choice
+        options: [demo, real]
+        default: demo
+      execute:
+        description: "ORDER MODE ONLY: really click Buy/Sell (unticked = dry run, nothing is sent)"
+        type: boolean
+        default: false
+      side:
+        type: choice
+        options: [buy, sell]
+        default: buy
+      lots:
+        description: "Dummy order volume (max 0.10, multiple of 0.01)"
+        default: "0.01"
+      close_after:
+        description: "Close the dummy position afterwards"
+        type: boolean
+        default: true
+      seconds:
+        description: "ticks / probe duration (seconds)"
+        default: "60"
+      managed_path:
+        description: "monitor mode: path to managed positions JSON (optional)"
+        default: ""
+
+      real_order_confirm:
+        description: "Real + execute only: type REAL-<last 4 digits of the real login>"
+        default: ""
+
+concurrency:
+  group: headway-terminal
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: ${{ inputs.account_mode == 'real' && 'real-account' || 'demo-account' }}
+    defaults:
+      run:
+        working-directory: headway/headway-mt5-web-automation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: headway/headway-mt5-web-automation/package-lock.json
+
+      - name: Install, compile, unit-test
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm test
+          npx playwright install --with-deps chromium
+
+      - name: Validate inputs and secrets
+        env:
+          LOTS: ${{ inputs.lots }}
+          SECONDS_IN: ${{ inputs.seconds }}
+          ACCOUNT: ${{ inputs.account_mode }}
+          D_URL: ${{ secrets.WEB_TERMINAL_URL }}
+          D_LOGIN: ${{ secrets.MT5_LOGIN }}
+          D_PASS: ${{ secrets.MT5_PASSWORD }}
+          R_URL: ${{ secrets.REAL_WEB_TERMINAL_URL }}
+          R_LOGIN: ${{ secrets.REAL_MT5_LOGIN }}
+          R_PASS: ${{ secrets.REAL_MT5_PASSWORD }}
+          R_LABEL: ${{ vars.EXPECTED_SERVER_LABEL }}
+        run: |
+          [[ "$LOTS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "lots must be numeric"; exit 1; }
+          [[ "$SECONDS_IN" =~ ^[0-9]+$ ]] || { echo "seconds must be an integer"; exit 1; }
+          if [ "$ACCOUNT" = "real" ]; then
+            test -n "$R_URL" && test -n "$R_LOGIN" && test -n "$R_PASS" || { echo "real mode needs REAL_WEB_TERMINAL_URL, REAL_MT5_LOGIN, REAL_MT5_PASSWORD"; exit 1; }
+            test -n "$R_LABEL" || { echo "real mode needs repository variable EXPECTED_SERVER_LABEL"; exit 1; }
+          else
+            test -n "$D_LOGIN" && test -n "$D_PASS" || { echo "demo mode needs MT5_LOGIN and MT5_PASSWORD"; exit 1; }
+          fi
+
+      - name: Run
+        env:
+          MODE: ${{ inputs.mode }}
+          SIDE: ${{ inputs.side }}
+          LOTS: ${{ inputs.lots }}
+          SECONDS_IN: ${{ inputs.seconds }}
+          EXECUTE: ${{ inputs.execute }}
+          CLOSE_AFTER: ${{ inputs.close_after }}
+          ACCOUNT_MODE: ${{ inputs.account_mode }}
+          EXPECTED_SERVER_LABEL: ${{ vars.EXPECTED_SERVER_LABEL }}
+          WEB_TERMINAL_URL: ${{ inputs.account_mode == 'real' && secrets.REAL_WEB_TERMINAL_URL || secrets.WEB_TERMINAL_URL }}
+          MT5_LOGIN: ${{ inputs.account_mode == 'real' && secrets.REAL_MT5_LOGIN || secrets.MT5_LOGIN }}
+          MT5_PASSWORD: ${{ inputs.account_mode == 'real' && secrets.REAL_MT5_PASSWORD || secrets.MT5_PASSWORD }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+          ALLOW_ORDERS: ${{ inputs.execute && 'yes' || 'no' }}
+          REAL_ORDER_CONFIRM: ${{ inputs.real_order_confirm }}
+          HEADLESS: "true"
+          SLOW_MO: "60"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          args=(--mode="$MODE" --symbol=EURUSD --side="$SIDE" --lots="$LOTS" --seconds="$SECONDS_IN")
+          [ "$MODE" = "order" ] && [ "$EXECUTE" = "true" ] && args+=(--execute)
+          [ "$MODE" = "order" ] && [ "$CLOSE_AFTER" = "true" ] && args+=(--close)
+          [ "$MODE" = "quotes" ] && args+=(--require)
+          npx ts-node src/index.ts "${args[@]}" 2>&1 | tee artifacts/automation.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: "Upload artifacts (PRIVATE - screenshots show your balance)"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headway-${{ inputs.mode }}-${{ github.run_id }}
+          path: headway/headway-mt5-web-automation/artifacts/
+          retention-days: 7
+          if-no-files-found: warn

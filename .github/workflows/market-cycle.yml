@@ -1,0 +1,103 @@
+name: Market cycle (every 30 min, FX hours)
+
+# Runs itself: every 30 minutes (:02 and :32) across the forex week, Sun ~21:00 UTC -> Fri ~22:00 UTC.
+# Each run: login → native Headway M30 history (~500 bars) → upsert Supabase → 51-strategy scan →
+# real order placement (signal_id dedup) → position monitoring (SL + original time-exit) → audit + sync.
+# GitHub scheduled runs are best-effort (they can start late or occasionally be skipped); the watchdog
+# workflow alerts you if the pipeline goes quiet while the market is open.
+
+on:
+  schedule:
+    - cron: "2,32 21-23 * * 0"
+    - cron: "2,32 * * * 1-4"
+    - cron: "2,32 0-21 * * 5"
+  workflow_dispatch:
+    inputs:
+      force_scan:
+        description: "Scan outside London/NY sessions (testing)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: market-cycle
+  cancel-in-progress: false       # a late run queues behind the current one; the single terminal session is never doubled
+
+permissions:
+  contents: read
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      ACCOUNT_MODE: ${{ vars.ACCOUNT_MODE || 'demo' }}
+      EXPECTED_SERVER_LABEL: ${{ vars.EXPECTED_SERVER_LABEL }}
+      BRIDGE_ACCOUNT_MODE: ${{ vars.ACCOUNT_MODE || 'demo' }}
+      BRIDGE_EXPECTED_SERVER: ${{ vars.ACCOUNT_MODE == 'real' && vars.EXPECTED_SERVER_LABEL || 'Headway-Demo' }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      KB_FORCE_SCAN: ${{ github.event.inputs.force_scan || 'false' }}
+      WEB_TERMINAL_URL: ${{ vars.ACCOUNT_MODE == 'real' && secrets.REAL_WEB_TERMINAL_URL || secrets.WEB_TERMINAL_URL }}
+      MT5_LOGIN: ${{ vars.ACCOUNT_MODE == 'real' && secrets.REAL_MT5_LOGIN || secrets.MT5_LOGIN }}
+      MT5_PASSWORD: ${{ vars.ACCOUNT_MODE == 'real' && secrets.REAL_MT5_PASSWORD || secrets.MT5_PASSWORD }}
+      PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+      HEADLESS: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required secrets present
+        run: |
+          test -n "$SUPABASE_URL" && test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "::error::SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required: Supabase is the store between runs"; exit 1; }
+          test -n "$MT5_LOGIN" && test -n "$MT5_PASSWORD" || { echo "::error::Headway credentials missing for ACCOUNT_MODE=$ACCOUNT_MODE (real mode uses REAL_* secrets only)"; exit 1; }
+          if [ "$ACCOUNT_MODE" = "real" ]; then test -n "$WEB_TERMINAL_URL" && test -n "$EXPECTED_SERVER_LABEL" || { echo "::error::real mode needs REAL_WEB_TERMINAL_URL and variable EXPECTED_SERVER_LABEL"; exit 1; }; fi
+
+      # Node + browser first: the sooner the terminal session starts, the more of each half-hour is observed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: headway/headway-mt5-web-automation/package-lock.json
+      - name: Install terminal automation
+        working-directory: headway/headway-mt5-web-automation
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tse-reference/tse-mt5-integration/requirements.txt
+      - run: pip install -r tse-reference/tse-mt5-integration/requirements.txt pytest
+
+      - name: Unit tests (fail fast, demo contract)
+        run: |
+          (cd bridge && BRIDGE_ACCOUNT_MODE=demo BRIDGE_EXPECTED_SERVER=Headway-Demo python -m pytest -q)
+          (cd headway/headway-mt5-web-automation && npm test)
+
+      - name: Cycle (sample, scan, intake, simulate, verify)
+        run: scripts/run_cycle.sh
+
+      - name: Sync audit log and tables to Supabase
+        if: always()
+        run: |
+          code=$(cat work/exit_code 2>/dev/null || echo 1)
+          for i in 1 2 3; do
+            (cd bridge && python -m tsebridge.supabase_sync sync --audit-dir ../audit --exit-code "$code") && exit 0
+            sleep 10
+          done
+          echo "::error::Supabase sync failed; this run's events are in the uploaded artifact"; exit 1
+
+      - name: Upload diagnostics (JSON/logs only, no screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle-${{ github.run_id }}
+          path: |
+            audit/events.jsonl
+            audit/summary.json
+            work/history_quality.json
+            headway/headway-mt5-web-automation/artifacts/*.json
+            headway/headway-mt5-web-automation/artifacts/*.log
+          retention-days: 14
+          if-no-files-found: ignore
