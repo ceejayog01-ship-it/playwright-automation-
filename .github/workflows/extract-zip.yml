@@ -1,0 +1,120 @@
+name: Extract project zip
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_path:
+        description: "ZIP file path in the repository (leave blank for automatic detection)"
+        required: false
+        default: ""
+  push:
+    paths:
+      - "tse-headway-trading-integrated.zip"
+      - "tse-headway-trading-integrated.zip.zip"
+      - "tse-headway-trading-integrated-*.zip"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extract-project-zip
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Locate and validate ZIP
+        id: zip
+        shell: bash
+        env:
+          REQUESTED_ZIP: ${{ inputs.zip_path }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$REQUESTED_ZIP" ]]; then
+            ZIP_FILE="$REQUESTED_ZIP"
+          else
+            ZIP_FILE=""
+            for candidate in \
+              "tse-headway-trading-integrated.zip" \
+              "tse-headway-trading-integrated.zip.zip"; do
+              if [[ -f "$candidate" ]]; then
+                ZIP_FILE="$candidate"
+                break
+              fi
+            done
+
+            if [[ -z "$ZIP_FILE" ]]; then
+              ZIP_FILE="$(find . -maxdepth 1 -type f \
+                -name 'tse-headway-trading-integrated-*.zip' \
+                -print -quit)"
+            fi
+          fi
+
+          if [[ -z "$ZIP_FILE" || ! -f "$ZIP_FILE" ]]; then
+            echo "::error::ZIP file not found. Put it in the repository root or set the workflow_dispatch zip_path input."
+            echo "Root directory contents:"
+            ls -la
+            exit 1
+          fi
+
+          echo "Using archive: $ZIP_FILE"
+          if ! unzip -tq "$ZIP_FILE"; then
+            echo "::error::The selected file is not a valid ZIP archive or is corrupted: $ZIP_FILE"
+            exit 1
+          fi
+
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract archive
+        shell: bash
+        env:
+          ZIP_FILE: ${{ steps.zip.outputs.zip_file }}
+        run: |
+          set -euo pipefail
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+          echo "Extracted file count:"
+          find extracted -type f | wc -l
+
+          echo "Extracted top-level contents:"
+          find extracted -mindepth 1 -maxdepth 2 -print | sort | head -80
+
+          if [[ ! -d extracted/integrated ]]; then
+            echo "::error::Expected extracted/integrated/ was not found. Check the archive's internal folder structure."
+            exit 1
+          fi
+
+      - name: Commit extracted project
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -f extracted/
+          if git diff --cached --quiet; then
+            echo "No extracted-file changes to commit."
+          else
+            git commit -m "Extract project ZIP"
+            git push
+          fi
+
+      - name: Upload extracted project as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extracted-headway-project
+          path: extracted/
+          if-no-files-found: error
+          retention-days: 7
