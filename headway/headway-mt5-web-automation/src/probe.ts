@@ -37,7 +37,7 @@ export function attachProbe(page: Page, secrets: string[], context?: BrowserCont
   const red = buildRedactor(secrets);
   const http = new Map<string, { method: string; type: string; status: number; contentType: string; count: number; bytes: number; sample?: string }>();
   const sockets: Array<Record<string, any>> = [];
-  const rawFrames: Array<{ socketId: number; direction: 'incoming' | 'outgoing'; kind: 'text' | 'binary'; timestamp: string; length: number; sha256: string; file: string; redactions: string[] }> = [];
+  const rawFrames: Array<{ socketId: number; direction: 'incoming' | 'outgoing'; kind: 'text' | 'binary'; timestamp: string; length: number; sha256: string; file: string; sanitizedFile?: string; redactions: string[] }> = [];
   const attachedPages = new WeakSet<Page>();
   let socketSequence = 0;
   const rawRoot = path.join(process.cwd(), 'artifacts', 'chart-probe', 'websocket-raw');
@@ -88,7 +88,7 @@ export function attachProbe(page: Page, secrets: string[], context?: BrowserCont
           let safe = payload as string;
           for (const secret of secrets.filter(x => x && x.length >= 3)) {
             let at = safe.indexOf(secret);
-            while (at !== -1) { safe = safe.slice(0, at) + '*'.repeat(secret.length) + safe.slice(at + secret.length); redactions.push(`known-secret@${at}:${secret.length}`); at = safe.indexOf(secret, at + secret.length); }
+            while (at !== -1) { safe = safe.slice(0, at) + '*'.repeat(secret.length) + safe.slice(at + secret.length); redactions.push(`known-secret@\( {at}: \){secret.length}`); at = safe.indexOf(secret, at + secret.length); }
           }
           safe = safe.replace(/(password|passwd|access[_-]?token|refresh[_-]?token|authorization|bearer|session[_-]?id|sid|jwt|api[_-]?key)(\s*[=:]\s*|\s+)([^\s,;\"'&}]+)/ig, (_m, key: string, sep: string, value: string) => { redactions.push(`credential-field:${key}`); return key + sep + '*'.repeat(value.length); });
           bytes = Buffer.from(safe, 'utf8');
@@ -101,7 +101,7 @@ export function attachProbe(page: Page, secrets: string[], context?: BrowserCont
           bytes = Buffer.from(payload as Buffer);
         }
         const ext = isText ? 'txt' : 'bin';
-        const file = `ws-${String(socketId).padStart(3, '0')}-${direction}-${String(rawFrames.length + 1).padStart(6, '0')}.${ext}`;
+        const file = `ws-\( {String(socketId).padStart(3, '0')}- \){direction}-\( {String(rawFrames.length + 1).padStart(6, '0')}. \){ext}`;
         fs.writeFileSync(path.join(rawRoot, file), bytes);
         if (!isText) {
           const safe = Buffer.from(bytes);
@@ -110,7 +110,7 @@ export function attachProbe(page: Page, secrets: string[], context?: BrowserCont
               let at = 0;
               while ((at = safe.indexOf(enc, at)) !== -1) {
                 safe.fill(0, at, at + enc.length);
-                redactions.push(`known-secret@${at}:${enc.length}`);
+                redactions.push(`known-secret@\( {at}: \){enc.length}`);
                 at += enc.length;
               }
             }
@@ -121,7 +121,7 @@ export function attachProbe(page: Page, secrets: string[], context?: BrowserCont
           while ((match = authRe.exec(ascii))) {
             const valueStart = match.index + match[0].length - match[3].length;
             safe.fill(0, valueStart, valueStart + match[3].length);
-            redactions.push(`credential-field@${valueStart}:${match[3].length}`);
+            redactions.push(`credential-field@\( {valueStart}: \){match[3].length}`);
           }
           const sanitizedFile = file.replace(/\.bin$/, '.sanitized.bin');
           fs.writeFileSync(path.join(rawRoot, sanitizedFile), safe);
@@ -162,7 +162,7 @@ export function attachProbe(page: Page, secrets: string[], context?: BrowserCont
       const resources = await f.evaluate(() => performance.getEntriesByType('resource').map(e => (e as PerformanceResourceTiming).name.split('?')[0]).filter(n => /chart|candle|bar|history|rates|ohlc|quote|tick/i.test(n)).slice(0, 80)).catch(() => []);
       frames.push({ url: noQuery(f.url()), globals, resources });
     }
-    const textSym = (s: any) => /EURUSD/.test(`${s.preview || ''}${s.asciiHint || ''}${s.utf16Hint || ''}`);
+    const textSym = (s: any) => /EURUSD/.test(`\( {s.preview || ''} \){s.asciiHint || ''}${s.utf16Hint || ''}`);
     const report = {
       schema: 2, captured_at: new Date().toISOString(),
       rawFrameCapture: { directory: 'websocket-raw', frameCount: rawFrames.length, manifest: 'websocket-frames.json' },
@@ -187,4 +187,4 @@ export function attachProbe(page: Page, secrets: string[], context?: BrowserCont
   const beginCapture = (label: string) => { cap = { label, frames: [], bufs: [] }; };
   const endCapture = () => { const c = cap; cap = null; if (c) captures.push(c); return c; };
   return { finish, counters, beginCapture, endCapture, captures: () => captures };
-}
+    }
