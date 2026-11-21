@@ -1,13 +1,26 @@
 name: Headway chart probe (read-only audit)
+
 on:
   workflow_dispatch:
+
 permissions:
   contents: read
   actions: read
+
+concurrency:
+  group: headway-chart-probe
+  cancel-in-progress: false
+
 jobs:
   chart-probe:
+    name: Verify Headway account and chart
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: headway/headway-mt5-web-automation
+
     env:
       ACCOUNT_MODE: demo
       WEB_TERMINAL_URL: https://hw.online/webterminal/mt5-demo/
@@ -16,30 +29,105 @@ jobs:
       EXPECTED_SERVER_LABEL: Headway-Demo
       HEADLESS: 'true'
       DEFAULT_TIMEOUT: '60000'
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify project files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking project directory..."
+
+          test -f package.json || {
+            echo "::error::package.json is missing from the expected project directory."
+            exit 1
+          }
+
+          test -f package-lock.json || {
+            echo "::error::package-lock.json is missing from the expected project directory."
+            exit 1
+          }
+
+          test -f src/chartprobe.ts || {
+            echo "::error::Chart probe source file is missing."
+            exit 1
+          }
+
+          echo "Project files verified."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
+
       - name: Verify required secrets
         shell: bash
         run: |
-          test -n "$MT5_LOGIN" || { echo 'MT5_LOGIN secret missing'; exit 1; }
-          test -n "$MT5_PASSWORD" || { echo 'MT5_PASSWORD secret missing'; exit 1; }
-          [[ "$MT5_LOGIN" =~ ^[0-9]{5,}$ ]] || { echo 'MT5_LOGIN must be numeric'; exit 1; }
+          set -euo pipefail
+
+          test -n "$MT5_LOGIN" || {
+            echo "::error::MT5_LOGIN secret is missing."
+            exit 1
+          }
+
+          test -n "$MT5_PASSWORD" || {
+            echo "::error::MT5_PASSWORD secret is missing."
+            exit 1
+          }
+
+          [[ "$MT5_LOGIN" =~ ^[0-9]{5,}$ ]] || {
+            echo "::error::MT5_LOGIN must be numeric."
+            exit 1
+          }
+
+          echo "Required credentials are present."
+          echo "Credential values will not be displayed."
+
+      - name: Install exact locked dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Compile TypeScript
         run: npm run build
+
       - name: Run automated tests
         run: npm test
-      - name: Run read-only chart probe
+
+      - name: Run read-only Headway chart probe
         run: npm run chartprobe
-      - name: Upload audit evidence (also on failure)
+
+      - name: Verify chart probe evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPORT="artifacts/chart-probe/chart-probe-report.json"
+          IDENTITY="artifacts/chart-probe/account-identity-report.json"
+
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::Chart probe report was not generated."
+            exit 1
+          fi
+
+          echo "Chart probe report found."
+
+          if [ ! -f "$IDENTITY" ]; then
+            echo "::warning::Account identity report was not generated."
+          else
+            echo "Account identity report found."
+          fi
+
+      - name: Upload chart probe audit evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: headway-chart-probe-audit-${{ github.run_id }}
-          path: artifacts/chart-probe/
+          path: headway/headway-mt5-web-automation/artifacts/chart-probe/
           if-no-files-found: warn
           retention-days: 14
