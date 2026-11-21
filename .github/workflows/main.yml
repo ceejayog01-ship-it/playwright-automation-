@@ -1,0 +1,125 @@
+name: Extract project zip
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_path:
+        description: "ZIP filename in repository root (leave blank for auto-detection)"
+        required: false
+        default: ""
+
+  push:
+    paths:
+      - "tse-headway-trading-integrated.zip"
+      - "tse-headway-trading-integrated.zip.zip"
+      - "tse-headway-trading-integrated-*.zip"
+
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extract-project-zip
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Locate and validate ZIP
+        id: zip
+        shell: bash
+        env:
+          REQUESTED_ZIP: ${{ inputs.zip_path }}
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE=""
+
+          if [[ -n "$REQUESTED_ZIP" ]]; then
+            ZIP_FILE="$REQUESTED_ZIP"
+          else
+            for candidate in \
+              "tse-headway-trading-integrated.zip" \
+              "tse-headway-trading-integrated.zip.zip"; do
+
+              if [[ -f "$candidate" ]]; then
+                ZIP_FILE="$candidate"
+                break
+              fi
+            done
+          fi
+
+          if [[ -z "$ZIP_FILE" || ! -f "$ZIP_FILE" ]]; then
+            echo "::error::ZIP file not found in repository root."
+            ls -lah
+            exit 1
+          fi
+
+          echo "Selected ZIP: $ZIP_FILE"
+
+          if ! unzip -tq "$ZIP_FILE"; then
+            echo "::error::Invalid or corrupted ZIP archive."
+            exit 1
+          fi
+
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract project
+        shell: bash
+        env:
+          ZIP_FILE: ${{ steps.zip.outputs.zip_file }}
+        run: |
+          set -euo pipefail
+
+          rm -rf extracted
+          mkdir -p extracted
+
+          unzip -q "$ZIP_FILE" -d extracted
+
+          echo "Extraction completed."
+
+          echo "Extracted files:"
+          find extracted -type f | head -80
+
+          if [[ ! -d extracted/integrated ]]; then
+            echo "::error::Expected integrated directory was not found."
+            exit 1
+          fi
+
+          echo "Total extracted files:"
+          find extracted -type f | wc -l
+
+      - name: Commit extracted files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -f extracted/
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Extract project ZIP"
+            git push
+          fi
+
+      - name: Upload extracted project
+        uses: actions/upload-artifact@v4
+        with:
+          name: extracted-headway-project
+          path: extracted/
+          if-no-files-found: error
+          retention-days: 7
