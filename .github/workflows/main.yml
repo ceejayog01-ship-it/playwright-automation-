@@ -1,0 +1,39 @@
+# .github/workflows/extract-zip.yml
+name: Extract project zip
+
+on:
+  workflow_dispatch:          # manual
+  push:
+    paths:
+      - 'tse-headway-trading-integrated.zip'   # only when the zip changes
+  release:
+    types: [published]
+
+permissions:
+  contents: write             # needed if you want the workflow to commit the extracted files
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract zip
+        run: |
+          # Adjust the zip name if yours is different
+          unzip -o tse-headway-trading-integrated.zip -d extracted/
+          # Optional: move contents to root so the rest of the workflows see them
+          # rsync -a extracted/integrated/ ./
+          # rm -rf extracted/
+
+      - name: Show what was extracted
+        run: find extracted -type f | head -40
+
+      # Optional: commit the extracted tree back to the repo
+      # - name: Commit extracted files
+      #   run: |
+      #     git config user.name "github-actions"
+      #     git config user.email "github-actions@github.com"
+      #     git add extracted/   # or the root if you moved files
+      #     git commit -m "Extracted project from zip" || echo "No changes"
+      #     git push
