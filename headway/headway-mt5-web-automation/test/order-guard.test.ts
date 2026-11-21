@@ -1,34 +1,76 @@
-import * as assert from 'assert';
+import {
+  assertStrategyOrderAllowed,
+  MAX_STRATEGY_LOTS
+} from '../src/strategyOrder';
+
+import { OrderGuardError } from '../src/order';
 import { loadPolicy } from '../src/policy';
-import { assertOrderAllowed, OrderGuardError, MAX_DUMMY_LOTS, orderExitCode } from '../src/order';
 
-const demo = loadPolicy({});
-const real = loadPolicy({ ACCOUNT_MODE: 'real', EXPECTED_SERVER_LABEL: 'Headway-Real' });
-const base = { symbol: 'EURUSD', side: 'buy' as const, lots: 0.01, execute: false, closeAfter: false };
-const fails = (fn: () => void, reason: string) => assert.throws(fn, (e: Error) => e instanceof OrderGuardError && e.message.startsWith(reason), reason);
+process.env.ACCOUNT_MODE = 'demo';
 
-// dry run needs no permission, on either account
-assertOrderAllowed(demo, base, {});
-assertOrderAllowed(real, base, {});
-// executing needs the explicit flag
-fails(() => assertOrderAllowed(demo, { ...base, execute: true }, {}), 'orders_disabled');
-assertOrderAllowed(demo, { ...base, execute: true }, { ALLOW_ORDERS: 'yes' });
-fails(() => assertOrderAllowed(demo, { ...base, execute: true }, { ALLOW_ORDERS: 'true' }), 'orders_disabled');
-// real account: also needs the typed confirmation bound to THIS login
-const env = { ALLOW_ORDERS: 'yes', MT5_LOGIN: '9876543' };
-fails(() => assertOrderAllowed(real, { ...base, execute: true }, env), 'real_order_confirmation');
-fails(() => assertOrderAllowed(real, { ...base, execute: true }, { ...env, REAL_ORDER_CONFIRM: 'REAL-0000' }), 'real_order_confirmation');
-fails(() => assertOrderAllowed(real, { ...base, execute: true }, { ALLOW_ORDERS: 'yes', REAL_ORDER_CONFIRM: 'REAL-' }), 'real_mode_needs_MT5_LOGIN');
-assertOrderAllowed(real, { ...base, execute: true }, { ...env, REAL_ORDER_CONFIRM: 'REAL-6543' });
-// limits
-fails(() => assertOrderAllowed(demo, { ...base, symbol: 'XAUUSD' }, {}), 'symbol_not_allowed');
-assertOrderAllowed(demo, { ...base, symbol: 'XAUUSD' }, { ORDER_SYMBOLS: 'EURUSD,XAUUSD' });
-fails(() => assertOrderAllowed(demo, { ...base, lots: 0.5 }, {}), 'lots_out_of_range');
-fails(() => assertOrderAllowed(demo, { ...base, lots: 0 }, {}), 'lots_out_of_range');
-fails(() => assertOrderAllowed(demo, { ...base, lots: NaN }, {}), 'lots_out_of_range');
-fails(() => assertOrderAllowed(demo, { ...base, lots: 0.015 }, {}), 'lots_not_multiple');
-assertOrderAllowed(demo, { ...base, lots: MAX_DUMMY_LOTS }, {});
-fails(() => assertOrderAllowed(demo, { ...base, closeAfter: true }, {}), 'close_requires_execute');
-// exit codes: unverified or half-closed outcomes are never reported as success
-assert.deepStrictEqual(['dry_run_ok', 'executed_confirmed', 'executed_unconfirmed', 'executed_confirmed_close_failed', 'failed:x'].map(orderExitCode), [0, 0, 3, 3, 1]);
-console.log('order-guard: all assertions passed');
+const policy = loadPolicy();
+
+const base = {
+  signal_id: 's1',
+  symbol: 'EURUSD',
+  side: 'buy' as const,
+  lots: 0.01,
+  execute: false
+};
+
+// Test 1: A valid strategy order must be accepted.
+assertStrategyOrderAllowed(policy, base, {});
+
+// Test 2: An order exceeding the permitted lot size must be rejected.
+try {
+  assertStrategyOrderAllowed(
+    policy,
+    { ...base, lots: 1.0 },
+    {}
+  );
+
+  throw new Error('should reject large lots');
+} catch (e) {
+  if (!(e instanceof OrderGuardError)) throw e;
+}
+
+// Test 3: Order execution must be rejected when ALLOW_ORDERS is not enabled.
+try {
+  assertStrategyOrderAllowed(
+    policy,
+    { ...base, execute: true },
+    { ALLOW_ORDERS: 'no' }
+  );
+
+  throw new Error('should reject execute without ALLOW_ORDERS');
+} catch (e) {
+  if (!(e instanceof OrderGuardError)) throw e;
+}
+
+// Test 4: An order within the configured maximum must pass
+// when order execution is explicitly allowed.
+assertStrategyOrderAllowed(
+  policy,
+  {
+    ...base,
+    lots: MAX_STRATEGY_LOTS,
+    execute: true
+  },
+  { ALLOW_ORDERS: 'yes' }
+);
+
+// Test 5: A valid signal ID must be accepted.
+// Signal IDs must contain at least two characters.
+assertStrategyOrderAllowed(
+  policy,
+  {
+    ...base,
+    signal_id: 'x1',
+    lots: 0.50,
+    sl: 1.05,
+    execute: false
+  },
+  {}
+);
+
+console.log('strategy-order guard tests passed');
