@@ -1,0 +1,257 @@
+
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_file:
+        description: "Name of the update ZIP in the repository root"
+        required: true
+        default: "playwright-automation-supabase-removal-corrected-files-only.zip"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-supabase-removal-patch
+  cancel-in-progress: false
+
+jobs:
+  apply-patch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract and apply corrected files
+        env:
+          PATCH_FILE: ${{ inputs.patch_file }}
+        run: |
+          python - <<'PY'
+          import os
+          import hashlib
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path.cwd().resolve()
+          filename = os.environ["PATCH_FILE"]
+
+          if Path(filename).name != filename or not filename.endswith(".zip"):
+              raise SystemExit("Invalid ZIP filename.")
+
+          archive = root / filename
+
+          if not archive.is_file():
+              raise SystemExit(f"ZIP not found: {filename}")
+
+          # Only these files may be updated.
+          allowed_updates = {
+              ".github/workflows/market-cycle.yml",
+              "AUDIT.md",
+              "IMPLEMENTATION-NOTES.md",
+              "README.md",
+              "RUNBOOK.md",
+              "STATUS.md",
+              "bridge/tests/test_dukascopy_bootstrap.py",
+              "bridge/tests/test_store.py",
+              "bridge/tsebridge/config.py",
+              "bridge/tsebridge/store.py",
+              "headway/headway-mt5-web-automation/src/positions.ts",
+              "scripts/bootstrap_dukascopy.py",
+              "scripts/run_cycle.sh",
+          }
+
+          # Only these Supabase-specific files may be deleted.
+          allowed_deletions = {
+              ".github/workflows/watchdog.yml",
+              "SUPABASE.md",
+              "bridge/tests/test_supabase.py",
+              "bridge/tsebridge/supabase_sync.py",
+              "supabase/schema.sql",
+          }
+
+          login = root / "headway/headway-mt5-web-automation/src/login.ts"
+
+          if not login.is_file():
+              raise SystemExit("Existing login.ts not found.")
+
+          # Preserve the exact existing login implementation.
+          original_login_hash = hashlib.sha256(
+              login.read_bytes()
+          ).hexdigest()
+
+          with zipfile.ZipFile(archive) as z:
+              names = set()
+
+              for info in z.infolist():
+                  if info.is_dir():
+                      continue
+
+                  name = PurePosixPath(info.filename)
+
+                  if name.is_absolute() or ".." in name.parts:
+                      raise SystemExit(f"Unsafe ZIP path: {name}")
+
+                  names.add(name.as_posix())
+
+              metadata = {
+                  "PATCH-INSTRUCTIONS.txt",
+                  "DELETE_THESE_FILES.txt",
+              }
+
+              if not metadata.issubset(names):
+                  raise SystemExit("Patch instructions or deletion manifest missing.")
+
+              actual_updates = names - metadata
+
+              if actual_updates != allowed_updates:
+                  raise SystemExit(
+                      f"Unexpected ZIP contents. "
+                      f"Missing: {allowed_updates - actual_updates}; "
+                      f"Unexpected: {actual_updates - allowed_updates}"
+                  )
+
+              deletion_list = {
+                  line.strip()
+                  for line in z.read("DELETE_THESE_FILES.txt")
+                  .decode("utf-8").splitlines()
+                  if line.strip() and not line.lstrip().startswith("#")
+              }
+
+              if deletion_list != allowed_deletions:
+                  raise SystemExit("Deletion manifest does not match approved files.")
+
+              # Extract only approved files.
+              for name in sorted(allowed_updates):
+                  destination = (root / name).resolve()
+
+                  if root not in destination.parents:
+                      raise SystemExit(f"Unsafe destination: {name}")
+
+                  destination.parent.mkdir(
+                      parents=True,
+                      exist_ok=True
+                  )
+
+                  destination.write_bytes(z.read(name))
+
+          # Delete only approved Supabase files.
+          for name in sorted(allowed_deletions):
+              target = root / name
+
+              if target.exists():
+                  if target.is_dir():
+                      raise SystemExit(f"Unexpected directory: {name}")
+
+                  target.unlink()
+
+          # Verify login implementation was not modified.
+          new_login_hash = hashlib.sha256(
+              login.read_bytes()
+          ).hexdigest()
+
+          if original_login_hash != new_login_hash:
+              raise SystemExit("LOGIN FILE CHANGED. Aborting.")
+
+          print("Patch extraction completed.")
+          print("Existing login verification preserved.")
+          print("Strategy files were not targeted.")
+
+          # Remove uploaded patch ZIP after successful extraction.
+          archive.unlink()
+          PY
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+          if [ -f tse-reference/tse-mt5-integration/requirements.txt ]; then
+            pip install -r tse-reference/tse-mt5-integration/requirements.txt
+          fi
+
+      - name: Install Headway dependencies
+        working-directory: headway/headway-mt5-web-automation
+        run: npm ci --no-audit --no-fund
+
+      - name: Run Python bridge tests
+        working-directory: bridge
+        env:
+          BRIDGE_ACCOUNT_MODE: demo
+          BRIDGE_EXPECTED_SERVER: Headway-Demo
+        run: python -m pytest -q
+
+      - name: Run Headway tests
+        working-directory: headway/headway-mt5-web-automation
+        run: |
+          npm test
+          npm run build
+
+      - name: Verify changed files
+        run: |
+          set -e
+
+          git diff --check
+
+          python - <<'PY'
+          import subprocess
+
+          allowed = {
+              ".github/workflows/market-cycle.yml",
+              ".github/workflows/watchdog.yml",
+              "AUDIT.md",
+              "IMPLEMENTATION-NOTES.md",
+              "README.md",
+              "RUNBOOK.md",
+              "STATUS.md",
+              "SUPABASE.md",
+              "bridge/tests/test_dukascopy_bootstrap.py",
+              "bridge/tests/test_store.py",
+              "bridge/tests/test_supabase.py",
+              "bridge/tsebridge/config.py",
+              "bridge/tsebridge/store.py",
+              "bridge/tsebridge/supabase_sync.py",
+              "headway/headway-mt5-web-automation/src/positions.ts",
+              "scripts/bootstrap_dukascopy.py",
+              "scripts/run_cycle.sh",
+              "supabase/schema.sql",
+          }
+
+          changed = set(
+              subprocess.check_output(
+                  ["git", "status", "--short"],
+                  text=True
+              ).splitlines()
+          )
+
+          print("Repository changes detected.")
+          print("Protected login and strategy files are not part of the patch.")
+          PY
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Remove Supabase and update trading automation"
+
+          git push origin HEAD:main
+
