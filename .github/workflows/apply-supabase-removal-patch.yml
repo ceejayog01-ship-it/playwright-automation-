@@ -1,4 +1,4 @@
-
+name: Apply Supabase Removal Patch
 
 on:
   workflow_dispatch:
@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: apply-supabase-removal-patch
@@ -27,6 +28,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.REPO_WORKFLOW_TOKEN }}
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -54,7 +57,6 @@ jobs:
           if not archive.is_file():
               raise SystemExit(f"ZIP not found: {filename}")
 
-          # Only these files may be updated.
           allowed_updates = {
               ".github/workflows/market-cycle.yml",
               "AUDIT.md",
@@ -71,7 +73,6 @@ jobs:
               "scripts/run_cycle.sh",
           }
 
-          # Only these Supabase-specific files may be deleted.
           allowed_deletions = {
               ".github/workflows/watchdog.yml",
               "SUPABASE.md",
@@ -85,7 +86,6 @@ jobs:
           if not login.is_file():
               raise SystemExit("Existing login.ts not found.")
 
-          # Preserve the exact existing login implementation.
           original_login_hash = hashlib.sha256(
               login.read_bytes()
           ).hexdigest()
@@ -131,7 +131,6 @@ jobs:
               if deletion_list != allowed_deletions:
                   raise SystemExit("Deletion manifest does not match approved files.")
 
-              # Extract only approved files.
               for name in sorted(allowed_updates):
                   destination = (root / name).resolve()
 
@@ -145,7 +144,6 @@ jobs:
 
                   destination.write_bytes(z.read(name))
 
-          # Delete only approved Supabase files.
           for name in sorted(allowed_deletions):
               target = root / name
 
@@ -155,7 +153,6 @@ jobs:
 
                   target.unlink()
 
-          # Verify login implementation was not modified.
           new_login_hash = hashlib.sha256(
               login.read_bytes()
           ).hexdigest()
@@ -167,7 +164,6 @@ jobs:
           print("Existing login verification preserved.")
           print("Strategy files were not targeted.")
 
-          # Remove uploaded patch ZIP after successful extraction.
           archive.unlink()
           PY
 
@@ -191,16 +187,15 @@ jobs:
           BRIDGE_EXPECTED_SERVER: Headway-Demo
         run: python -m pytest -q
 
-      - name: Run Headway tests
+      - name: Run Headway tests and build
         working-directory: headway/headway-mt5-web-automation
         run: |
           npm test
           npm run build
 
-      - name: Verify changed files
+      - name: Verify changes
         run: |
-          set -e
-
+          set -euo pipefail
           git diff --check
 
           python - <<'PY'
@@ -229,13 +224,19 @@ jobs:
 
           changed = set(
               subprocess.check_output(
-                  ["git", "status", "--short"],
+                  ["git", "diff", "--name-only"],
                   text=True
               ).splitlines()
           )
 
-          print("Repository changes detected.")
-          print("Protected login and strategy files are not part of the patch.")
+          unexpected = changed - allowed
+
+          if unexpected:
+              raise SystemExit(
+                  f"Unexpected modified files: {sorted(unexpected)}"
+              )
+
+          print("Changed-file scope verified.")
           PY
 
       - name: Commit and push changes
@@ -254,4 +255,3 @@ jobs:
           git commit -m "Remove Supabase and update trading automation"
 
           git push origin HEAD:main
-
