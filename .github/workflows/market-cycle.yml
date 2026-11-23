@@ -1,0 +1,117 @@
+name: Market cycle (every 30 min, FX hours)
+
+# Runs itself: every 30 minutes (:02 and :32) across the forex week, Sun ~21:00 UTC -> Fri ~22:00 UTC.
+# Each run: Headway login/history → Dukascopy fill for missing history (500-bar minimum) →
+# 51-strategy scan → demo order placement (signal_id dedup) → position management → audit + sync.
+# GitHub scheduled runs are best-effort (they can start late or occasionally be skipped); the watchdog
+# workflow alerts you if the pipeline goes quiet while the market is open.
+
+on:
+  schedule:
+    - cron: "2,32 21-23 * * 0"
+    - cron: "2,32 * * * 1-4"
+    - cron: "2,32 0-21 * * 5"
+  workflow_dispatch:
+    inputs:
+      force_scan:
+        description: "Scan outside London/NY sessions (testing)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: market-cycle
+  cancel-in-progress: false       # a late run queues behind the current one; the single terminal session is never doubled
+
+permissions:
+  contents: read
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # This deployment is deliberately demo-only. Live-account execution is not enabled here.
+      ACCOUNT_MODE: demo
+      BRIDGE_ACCOUNT_MODE: demo
+      BRIDGE_EXPECTED_SERVER: Headway-Demo
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SECRET_KEY }}
+      # Permanent strategy execution on every scheduled market cycle (demo account only).
+      ALLOW_ORDERS: "yes"
+      BRIDGE_REAL_EXECUTION: "true"
+      MAX_ORDERS_PER_CYCLE: "1"
+      DUKASCOPY_MIN_M30_BARS: "500"
+      DUKASCOPY_LOOKBACK_DAYS: "60"
+      KB_FORCE_SCAN: ${{ github.event.inputs.force_scan || 'false' }}
+      WEB_TERMINAL_URL: ${{ secrets.WEB_TERMINAL_URL }}
+      MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+      MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
+      PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+      HEADLESS: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required secrets present
+        run: |
+          test "$ACCOUNT_MODE" = "demo" || { echo "::error::This workflow is locked to demo execution"; exit 1; }
+          test -n "$SUPABASE_URL" && test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "::error::Set SUPABASE_URL and either SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY"; exit 1; }
+          test -n "$MT5_LOGIN" && test -n "$MT5_PASSWORD" || { echo "::error::Headway demo MT5_LOGIN / MT5_PASSWORD secrets are missing"; exit 1; }
+          # WEB_TERMINAL_URL is optional in demo mode; the automation has the demo URL default.
+
+      # Node + browser first: the sooner the terminal session starts, the more of each half-hour is observed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: headway/headway-mt5-web-automation/package-lock.json
+      - name: Install terminal automation
+        working-directory: headway/headway-mt5-web-automation
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tse-reference/tse-mt5-integration/requirements.txt
+      - run: pip install -r tse-reference/tse-mt5-integration/requirements.txt pytest
+
+      - name: Unit tests (fail fast, demo contract)
+        run: |
+          (cd bridge && BRIDGE_ACCOUNT_MODE=demo BRIDGE_EXPECTED_SERVER=Headway-Demo python -m pytest -q)
+          (cd headway/headway-mt5-web-automation && npm test)
+
+      - name: Cycle (bootstrap history, scan, execute demo strategy orders, manage positions, verify)
+        run: bash scripts/run_cycle.sh
+
+      - name: Sync audit log and tables to Supabase
+        if: always()
+        run: |
+          # A cycle that never started may not have initialized its local audit chain.
+          # Avoid reporting a second, misleading sync failure when there are no events to sync.
+          if [ ! -s audit/events.jsonl ]; then
+            echo "::warning::No local audit events exist; skipping Supabase sync because the cycle did not initialize its audit log."
+            exit 0
+          fi
+          code=$(cat work/exit_code 2>/dev/null || echo 1)
+          for i in 1 2 3; do
+            (cd bridge && python -m tsebridge.supabase_sync sync --audit-dir ../audit --exit-code "$code") && exit 0
+            sleep 10
+          done
+          echo "::error::Supabase sync failed; this run's events are in the uploaded artifact"; exit 1
+
+      - name: Upload diagnostics (JSON/logs only, no screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle-${{ github.run_id }}
+          path: |
+            audit/events.jsonl
+            audit/summary.json
+            work/history_quality.json
+            work/dukascopy_bootstrap.json
+            headway/headway-mt5-web-automation/artifacts/*.json
+            headway/headway-mt5-web-automation/artifacts/*.log
+          retention-days: 14
+          if-no-files-found: ignore
