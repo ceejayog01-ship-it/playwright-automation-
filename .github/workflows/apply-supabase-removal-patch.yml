@@ -110,7 +110,9 @@ jobs:
               }
 
               if not metadata.issubset(names):
-                  raise SystemExit("Patch instructions or deletion manifest missing.")
+                  raise SystemExit(
+                      "Patch instructions or deletion manifest missing."
+                  )
 
               actual_updates = names - metadata
 
@@ -129,7 +131,9 @@ jobs:
               }
 
               if deletion_list != allowed_deletions:
-                  raise SystemExit("Deletion manifest does not match approved files.")
+                  raise SystemExit(
+                      "Deletion manifest does not match approved files."
+                  )
 
               for name in sorted(allowed_updates):
                   destination = (root / name).resolve()
@@ -149,7 +153,9 @@ jobs:
 
               if target.exists():
                   if target.is_dir():
-                      raise SystemExit(f"Unexpected directory: {name}")
+                      raise SystemExit(
+                          f"Unexpected directory: {name}"
+                      )
 
                   target.unlink()
 
@@ -163,9 +169,7 @@ jobs:
           print("Patch extraction completed.")
           print("Existing login verification preserved.")
           print("Strategy files were not targeted.")
-
-          archive.unlink()
-          PY
+          print("Patch ZIP preserved in repository.")
 
       - name: Install Python dependencies
         run: |
