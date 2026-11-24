@@ -12,7 +12,7 @@
  *    - If current time >= deadline  → close by market (TIME exit).
  *    - If price has crossed SL      → close by market (SL exit) when the
  *      broker has not already stopped it out.
- * 3. Write a machine-readable report so the bridge can update Supabase
+ * 3. Write a machine-readable report so the bridge can update its local hash-chained ledger
  *    (status, exit_reason, exit_price, exit_time, pips, pnl).
  *
  * Safety

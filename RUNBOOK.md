@@ -2,21 +2,20 @@
 
 ## A. One-time setup
 
-1. Apply `supabase/schema.sql` to the existing Supabase project (do not create a duplicate project).
+1. No external database is required. GitHub Actions restores and saves the local audit ledger and M30 candle CSV through its Actions cache.
 2. Add GitHub Actions secrets:
-   - `SUPABASE_URL` — Supabase Project URL.
-   - `SUPABASE_SECRET_KEY` — the new `sb_secret_...` Secret key; alternatively use the legacy `SUPABASE_SERVICE_ROLE_KEY`.
    - `MT5_LOGIN` and `MT5_PASSWORD` — Headway demo credentials.
    - `WEB_TERMINAL_URL` — optional override; demo mode has a built-in default URL.
    - `PROXY_SERVER` only if your terminal setup requires it.
-3. Never add the Supabase Publishable key as the backend service credential. Never commit secrets to GitHub.
+3. Never commit broker credentials to GitHub. Keep `MT5_LOGIN` and `MT5_PASSWORD` as GitHub Actions secrets.
 4. Enable GitHub Actions and use the default branch.
+5. **First migration only:** the previous Supabase audit/signal history is not imported. Before initializing local state, inspect the Headway demo account and make sure there are no unmanaged positions from this bot. Then manually dispatch `market-cycle.yml` and choose `YES_I_HAVE_RECONCILED_OPEN_POSITIONS_AND_ACCEPT_NEW_LEDGER`. This creates the new local ledger. If you cannot verify the account is clear, do not initialize or enable automated orders.
 
 ## B. Autonomous demo operation
 
 The scheduled `market-cycle.yml` runs every 30 minutes during the configured FX-week window. Each run:
 
-1. Restores and verifies the Supabase audit chain.
+1. Restores the local audit ledger and candle history from the GitHub Actions cache; the hash chain is verified locally before state is trusted. If the audit ledger is missing, the scheduled run stops rather than silently creating a blank deduplication/position ledger.
 2. Logs into the Headway demo terminal using the existing login implementation (unchanged).
 3. Attempts to retrieve Headway-native EURUSD M30 history and current quotes.
 4. Ensures at least 500 valid, completed M30 candles exist. If the store has fewer than 500, it downloads Dukascopy history and inserts only missing timestamps.
@@ -24,7 +23,7 @@ The scheduled `market-cycle.yml` runs every 30 minutes during the configured FX-
 6. Requires the latest completed candle to pass freshness validation.
 7. Runs the 51-strategy scanner when the data gate passes.
 8. Submits eligible strategy-generated orders in the Headway demo account (`ALLOW_ORDERS=yes`), with a maximum of one new order per cycle.
-9. Reconciles and manages existing positions, then synchronizes audit and ledger state to Supabase.
+9. Reconciles and manages existing positions, then saves the audit ledger and candle history to the GitHub Actions cache.
 
 Dukascopy does not require an account or API key. The GitHub runner does need network access to npm and the Dukascopy public data service. A provider/WAF failure is fail-closed: insufficient or stale data means no scan/order.
 
@@ -48,3 +47,7 @@ Dukascopy does not require an account or API key. The GitHub runner does need ne
 ## E. Important limitations
 
 GitHub scheduled workflows are best-effort and may start late or be skipped. The system is autonomous within successful workflow runs, but GitHub Actions is not a continuously running VPS. The native Headway binary candle decoder remains unproven; Dukascopy is the historical bootstrap fallback. A live demo run is still required to prove the user's credentials, data access, selectors, order fill and closure end to end.
+
+
+## State persistence limitation
+The Actions cache is a lightweight replacement for Supabase, not a transactional database. GitHub may evict caches. After the first migration, a missing audit ledger is a hard stop. Do not select the fresh-state confirmation to bypass a later cache loss; reconcile broker positions and recover the prior state before resuming.

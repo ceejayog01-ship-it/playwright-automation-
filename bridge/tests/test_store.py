@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 from tsebridge.common import DataError
-from tsebridge.store import (LocalStore, SupabaseStore, export_m30_csv, quality_report,
+from tsebridge.store import (LocalStore, export_m30_csv, quality_report,
                              parse_native_m30_csv, m30_bars)
 from tsebridge.lifecycle import Bar
 from helpers import dt, BAR

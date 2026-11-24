@@ -2,7 +2,7 @@
 # One scheduled market cycle — real-execution edition.
 # Prices: Headway-native M30 preferred; Dukascopy fills only missing historical timestamps.
 # Execution: accepted Design-A signals are permanently enabled for the demo account by market-cycle.yml.
-#   0  restore audit chain from Supabase
+#   0  use the audit chain and candle store restored from GitHub Actions cache
 #   1  login + fetch native M30 bars (fail-closed if invalid)
 #   2  upsert bars + quality gate
 #   3  TSE 51 BEST scan Design A only
@@ -16,6 +16,12 @@ HW="$ROOT/headway/headway-mt5-web-automation"
 BR="$ROOT/bridge"
 WORK="$ROOT/work"
 mkdir -p "$WORK" "$HW/artifacts" "$ROOT/audit"
+# Never create a fresh deduplication/position ledger silently. The workflow must
+# restore it from cache or create the empty file only after explicit migration confirmation.
+if [ ! -f "$ROOT/audit/events.jsonl" ]; then
+  echo "::error::audit/events.jsonl is missing; refusing to run without restored trading state"
+  exit 5
+fi
 export BRIDGE_DATA_DIR="${BRIDGE_DATA_DIR:-$ROOT/data}"
 export BRIDGE_WORK_DIR="$WORK"
 RUN="${GITHUB_RUN_ID:-local}"
@@ -28,10 +34,9 @@ export KB_PAIRS=EURUSD
 export KB_EXEC_PAIRS=EURUSD
 
 # 0 ---------------------------------------------------------------------------------------------
-py tsebridge.supabase_sync pull --audit-dir "$ROOT/audit" || {
-  echo "::error::cannot restore audit chain; aborting so the chain is never forked"
-  echo 1 > "$WORK/exit_code"; exit 1
-}
+# The workflow restores audit/events.jsonl and data/candles_m30.csv from its
+# serialized GitHub Actions cache before this script starts. EventLog verifies
+# the complete local hash chain; if it is corrupt, cycle.py fails closed.
 
 # 1 ---------------------------------------------------------------------------------------------
 echo "== native M30 history pull =="

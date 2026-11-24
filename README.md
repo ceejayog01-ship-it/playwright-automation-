@@ -2,47 +2,38 @@
 
 | Folder | What |
 |---|---|
-| `tse-reference/` | TSE signal engine (51 BEST strategies), unchanged; run with `KB_DESIGNS=A`, EURUSD |
-| `bridge/` | Python: native M30 store, signal intake + signal_id dedup, real-order path, position monitoring, hash-chained audit, Supabase sync |
-| `headway/headway-mt5-web-automation/` | Playwright: **fail-closed verified login**, chartprobe diagnostics, history attempt, quotes, probe, guarded orders, position monitor |
-| `supabase/schema.sql` | Tables for signals, positions, orders, candles, events, heartbeat |
-| `scripts/run_cycle.sh` | One scheduled cycle |
+| `tse-reference/` | TSE signal engine (51 BEST strategies); strategy files are unchanged |
+| `bridge/` | Python signal intake, deduplication, risk checks, local candle store, position lifecycle and hash-chained audit |
+| `headway/headway-mt5-web-automation/` | Playwright terminal automation; existing login implementation is unchanged |
+| `data/candles_m30.csv` | Local M30 candle store, persisted between scheduled runs by GitHub Actions cache |
+| `scripts/run_cycle.sh` | Scheduled market-cycle entry point |
 
-**Read in this order:** `SUPABASE.md` → `RUNBOOK.md` → `AUDIT.md` → `IMPLEMENTATION-NOTES.md`.
+Read `RUNBOOK.md`, then `AUDIT.md` and `IMPLEMENTATION-NOTES.md`.
 
-## Honest status (integrated)
+## Market data
 
-- **Account identity** (post-login labelled account number + server, same frame, exact match) is implemented and fail-closed.
-- **Chart selection** (EURUSD + M30 + visible title verification) is implemented and fail-closed inside `chartprobe`.
-- **Native 500-candle extraction is NOT complete.**  
-  `history.ts` is a best-effort evaluator against window/chart objects.  
-  `chartprobe` deliberately reports `nativeCandles.validated=false` and overall audit **FAIL** until a proven decoder exists for Headway’s binary WebSocket history frames.  
-  The cycle fails closed when insufficient native bars are returned — it does **not** invent candles from ticks or hover samples.
-- Strategy scan and order path exist, but production readiness depends on a successful native history pull.
+The cycle attempts Headway-native EURUSD M30 history first. If the local store has fewer than 500 valid completed M30 bars, `scripts/bootstrap_dukascopy.py` downloads historical EURUSD M30 bid candles from the public Dukascopy feed. Dukascopy rows are insert-only and do not overwrite existing Headway rows. Freshness and OHLC checks still apply; a failed history gate prevents scanning and order placement. The Headway native binary-history decoder remains unproven, so the Dukascopy fallback is the historical bootstrap path.
 
-## Contract
-- **Market data**: latest ~500 EURUSD M30 candles from the authenticated Headway MT5 terminal (source=`headway_native`). No manufactured 1s→M30 bars for the strategy.
-- **Strategy**: 51 BEST (Design A) every 30 minutes. Original parameters and time-exit horizons preserved.
-- **Execution**: valid signals → real market orders on the configured account (demo first). `signal_id` dedup. Position monitoring applies SL + time-exit.
-- **Simulation** is no longer the primary execution path.
+## Strategy and execution
+
+The scheduled `.github/workflows/market-cycle.yml` runs the existing 51-strategy scanner using the configured Design A path. It is explicitly locked to the Headway demo account, sets `ALLOW_ORDERS=yes`, and caps new strategy orders at one per cycle. A signal is not considered executed merely because the workflow is green: broker confirmation and the resulting ticket/position evidence are required.
+
+The existing strategy files, parameters, and Headway login verification implementation are not changed by this patch. The manual `demo-trade-test.yml` workflow remains separate and is not a substitute for the scheduled signal-driven execution path.
+
+## State persistence without Supabase
+
+Supabase REST calls, schema, sync code, and Supabase-only watchdog are removed. The market cycle stores candles in `data/candles_m30.csv` and restores/saves that file plus `audit/events.jsonl` through GitHub Actions cache. The event log remains hash-chained and verifies its chain before replay.
+
+GitHub Actions cache is not a transactional database and can be evicted. The workflow therefore refuses to trade when `audit/events.jsonl` is missing. On the first migration only, manually dispatch `market-cycle.yml` and select the explicit fresh-state confirmation **only after** checking that the Headway demo account has no unmanaged bot positions and accepting that the old Supabase signal/audit history will not be imported. Do not use that confirmation to bypass a missing cache after normal operation; reconcile broker positions and state first.
 
 ## Workflows
-- `market-cycle.yml` — scheduled every 30 min across the FX week.
-- `watchdog.yml` — heartbeat + daily audit-chain integrity.
-- `headway-terminal.yml` — manual login / quotes / history / probe / order / monitor.
-- `chart-probe.yml` — fail-closed diagnostic run (identity + chart + WS evidence). Upload artifacts even on failure.
 
-## Secrets
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-- `WEB_TERMINAL_URL`, `MT5_LOGIN`, `MT5_PASSWORD` (demo)
-- Optional real: `ACCOUNT_MODE=real`, `EXPECTED_SERVER_LABEL`, `REAL_*`
-- Optional `PROXY_SERVER` (residential recommended for CI)
+- `market-cycle.yml` — scheduled demo signal scan, execution, position management and local audit.
+- `headway-terminal.yml` — manual Headway terminal operations.
+- `chart-probe.yml` — read-only chart and WebSocket diagnostics.
+- `main.yml` — repository CI / automation checks.
+- `demo-trade-test.yml` — optional manual demo connectivity test; not part of the scheduled strategy cycle.
 
-There is **no Twelve Data dependency**. Every price used by the strategy is intended to come from the Headway terminal.
+## Verification status
 
-
-## Historical bootstrap and demo execution
-
-The market-cycle workflow requires at least 500 validated, completed EURUSD M30 candles. It first ingests available Headway-native history, then runs `scripts/bootstrap_dukascopy.py` to fill missing timestamps from the pinned `dukascopy-node@1.51.1` public-data downloader. No Dukascopy account or API key is required. Bootstrap inserts are tagged `dukascopy_bootstrap` and are insert-only: they do not overwrite existing Headway rows. The scanner still requires fresh, valid market data and a successful Headway session before it can produce an executable order.
-
-The scheduled market-cycle workflow is configured for demo-only automatic strategy execution (`ALLOW_ORDERS=yes`), capped at one new strategy order per cycle. It remains locked to the Headway demo account; this workflow does not enable live-account trading. Existing position monitoring and broker confirmation remain part of each cycle.
+Offline Python bridge suite: 50 tests passed in the packaging environment. Bash syntax and workflow YAML are checked during packaging. Live Dukascopy availability, Headway login, broker order placement, broker-side position management and closure still require a real GitHub Actions demo run; none is claimed complete by creating this ZIP.

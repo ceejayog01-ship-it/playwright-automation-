@@ -2,14 +2,14 @@
 
 Native path (preferred):
   - Headway automation --mode=history writes history_EURUSD_M30.csv / .json
-  - This module upserts those bars into Supabase (source='headway_native')
+  - This module stores bars in the local data directory, persisted between GitHub Actions runs by workflow cache.
   - No M1 construction, no 1-second sampling aggregation for strategy.
 
 Legacy path (diagnostic only):
   - 1 Hz sampler still exists for debugging; its M1->M30 aggregation is retained
     but MUST NOT be used as the strategy feed.
 
-Backends: Supabase (when credentials set) or local CSV (data/).
+Backend: local CSV (data/), persisted between scheduled runs using GitHub Actions cache.
 """
 import argparse
 import csv
@@ -23,7 +23,6 @@ from typing import Dict, List, Optional
 from . import config as C
 from .common import DataError, iso, parse_utc
 from .lifecycle import Bar
-from .supabase_sync import Supabase, from_env
 
 HALF = timedelta(minutes=30)
 HISTORY_DAYS = 14
@@ -178,32 +177,10 @@ class LocalStore:
         return sorted(rows, key=lambda x: x["start_ts"])[-limit:]
 
 
-class SupabaseStore:
-    def __init__(self, sb: Supabase):
-        self.sb = sb
-
-    def upsert_m30(self, rows: List[dict], ignore_existing: bool = False) -> int:
-        if not rows:
-            return 0
-        body = [{k: r.get(k) for k in M30_COLS} for r in rows]
-        resolution = "ignore-duplicates" if ignore_existing else "merge-duplicates"
-        self.sb._call("POST", "candles_m30", params={"on_conflict": "symbol,start_ts"}, body=body,
-                      prefer=f"resolution={resolution},return=minimal")
-        return len(rows)
-
-    def load_m30(self, symbol: str, limit: int = 500) -> List[dict]:
-        rows = self.sb._call(
-            "GET", "candles_m30",
-            params={"symbol": f"eq.{symbol}", "order": "start_ts.desc", "limit": str(limit)},
-        ) or []
-        return list(reversed(rows))
-
-
 def get_store():
-    sb = from_env()
-    if sb:
-        return SupabaseStore(sb)
-    return LocalStore(Path("data"))
+    # GitHub Actions runners are ephemeral; market-cycle.yml restores and saves
+    # this local store through the Actions cache before/after each serialized run.
+    return LocalStore(Path(os.environ.get("BRIDGE_DATA_DIR", "data")))
 
 
 def export_m30_csv(rows: List[dict], path: Path) -> None:

@@ -2,9 +2,8 @@ name: Market cycle (every 30 min, FX hours)
 
 # Runs itself: every 30 minutes (:02 and :32) across the forex week, Sun ~21:00 UTC -> Fri ~22:00 UTC.
 # Each run: Headway login/history → Dukascopy fill for missing history (500-bar minimum) →
-# 51-strategy scan → demo order placement (signal_id dedup) → position management → audit + sync.
-# GitHub scheduled runs are best-effort (they can start late or occasionally be skipped); the watchdog
-# workflow alerts you if the pipeline goes quiet while the market is open.
+# 51-strategy scan → demo order placement (signal_id dedup) → position management → local audit.
+# GitHub scheduled runs are best-effort and can start late or occasionally be skipped.
 
 on:
   schedule:
@@ -17,6 +16,14 @@ on:
         description: "Scan outside London/NY sessions (testing)"
         required: false
         default: "false"
+      confirm_fresh_state:
+        description: "First migration only: confirm no open bot positions and accept a new local ledger"
+        type: choice
+        required: true
+        default: "NO"
+        options:
+          - "NO"
+          - "YES_I_HAVE_RECONCILED_OPEN_POSITIONS_AND_ACCEPT_NEW_LEDGER"
 
 concurrency:
   group: market-cycle
@@ -34,8 +41,6 @@ jobs:
       ACCOUNT_MODE: demo
       BRIDGE_ACCOUNT_MODE: demo
       BRIDGE_EXPECTED_SERVER: Headway-Demo
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SECRET_KEY }}
       # Permanent strategy execution on every scheduled market cycle (demo account only).
       ALLOW_ORDERS: "yes"
       BRIDGE_REAL_EXECUTION: "true"
@@ -51,10 +56,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GitHub-hosted runners are ephemeral. Restore the local event ledger and
+      # candle database so signal deduplication and open-position state survive.
+      - name: Restore persistent trading state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            audit/events.jsonl
+            data/candles_m30.csv
+          key: market-cycle-state-${{ github.run_id }}
+          restore-keys: |
+            market-cycle-state-
+
+      # Supabase history is deliberately not imported. Do not silently start a blank
+      # deduplication/position ledger if the Actions cache is missing or evicted.
+      # The one-time confirmation is required only for the first local-state bootstrap.
+      - name: Require restored state or explicit first-migration confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -s audit/events.jsonl ]; then
+            echo "Local audit ledger restored (size=$(wc -c < audit/events.jsonl) bytes)."
+          elif [ "${{ inputs.confirm_fresh_state }}" = "YES_I_HAVE_RECONCILED_OPEN_POSITIONS_AND_ACCEPT_NEW_LEDGER" ]; then
+            mkdir -p audit
+            : > audit/events.jsonl
+            echo "::warning::Starting a new local audit ledger. Previous Supabase signal history is not imported."
+          else
+            echo "::error::No local audit ledger was restored. Refusing to trade with missing deduplication/position state."
+            echo "For the first migration only, manually dispatch this workflow after checking the Headway demo account has no unmanaged bot positions, then select the explicit fresh-state confirmation."
+            exit 1
+          fi
+
       - name: Required secrets present
         run: |
           test "$ACCOUNT_MODE" = "demo" || { echo "::error::This workflow is locked to demo execution"; exit 1; }
-          test -n "$SUPABASE_URL" && test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "::error::Set SUPABASE_URL and either SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY"; exit 1; }
           test -n "$MT5_LOGIN" && test -n "$MT5_PASSWORD" || { echo "::error::Headway demo MT5_LOGIN / MT5_PASSWORD secrets are missing"; exit 1; }
           # WEB_TERMINAL_URL is optional in demo mode; the automation has the demo URL default.
 
@@ -85,21 +120,23 @@ jobs:
       - name: Cycle (bootstrap history, scan, execute demo strategy orders, manage positions, verify)
         run: bash scripts/run_cycle.sh
 
-      - name: Sync audit log and tables to Supabase
+      - name: Remove an uninitialized empty audit ledger
         if: always()
+        shell: bash
         run: |
-          # A cycle that never started may not have initialized its local audit chain.
-          # Avoid reporting a second, misleading sync failure when there are no events to sync.
-          if [ ! -s audit/events.jsonl ]; then
-            echo "::warning::No local audit events exist; skipping Supabase sync because the cycle did not initialize its audit log."
-            exit 0
+          if [ -f audit/events.jsonl ] && [ ! -s audit/events.jsonl ]; then
+            rm -f audit/events.jsonl
+            echo "::warning::Empty audit ledger removed; it will not be cached as initialized state."
           fi
-          code=$(cat work/exit_code 2>/dev/null || echo 1)
-          for i in 1 2 3; do
-            (cd bridge && python -m tsebridge.supabase_sync sync --audit-dir ../audit --exit-code "$code") && exit 0
-            sleep 10
-          done
-          echo "::error::Supabase sync failed; this run's events are in the uploaded artifact"; exit 1
+
+      - name: Save persistent trading state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            audit/events.jsonl
+            data/candles_m30.csv
+          key: market-cycle-state-${{ github.run_id }}
 
       - name: Upload diagnostics (JSON/logs only, no screenshots)
         if: always()

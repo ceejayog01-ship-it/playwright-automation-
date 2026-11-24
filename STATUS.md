@@ -1,6 +1,6 @@
 # Implementation status — Dukascopy bootstrap + autonomous demo cycle
 
-This status reflects the code in this ZIP. It distinguishes implemented code from behavior that still requires a successful GitHub/Headway demo run.
+This status reflects the code in this update ZIP. It distinguishes implemented code from behavior that still requires a successful GitHub/Headway demo run. The prior Supabase audit history is not migrated; first local-state initialization requires explicit manual confirmation after broker-position reconciliation.
 
 ## Implemented in this update
 
@@ -12,13 +12,12 @@ This status reflects the code in this ZIP. It distinguishes implemented code fro
 | Provenance | Every M30 row retains its `source`, including `headway_native` and `dukascopy_bootstrap` |
 | Feed comparison | Overlapping Headway/Dukascopy close differences are recorded in the bootstrap report; no equivalence is assumed |
 | Freshness gate | The latest completed M30 candle must pass the existing freshness rule before scan proceeds |
-| Supabase new key format | `SUPABASE_SECRET_KEY` / `sb_secret_...` supported; sent in `apikey` only, not as a Bearer JWT |
-| Legacy Supabase key | `SUPABASE_SERVICE_ROLE_KEY` remains supported |
+| State persistence | Local hash-chained audit ledger and candle CSV restored/saved with GitHub Actions cache; missing audit state fails closed |
 | Permanent strategy execution | Scheduled `market-cycle.yml` sets `ALLOW_ORDERS=yes` and `BRIDGE_REAL_EXECUTION=true` |
 | Demo-only guard | The scheduled market-cycle is hard-locked to `ACCOUNT_MODE=demo` and `Headway-Demo` |
 | Per-cycle order cap | Maximum one new strategy order per scheduled cycle |
 | Existing position management | Existing monitor/reconciliation stages remain in the cycle |
-| Audit integrity | Remote Supabase audit chain is verified in full before sync |
+| Audit integrity | Local hash chain is verified by the event-log reader before the cycle continues |
 | Login implementation | Existing Headway login code is unchanged in this update |
 
 ## Still requires live verification
@@ -26,12 +25,12 @@ This status reflects the code in this ZIP. It distinguishes implemented code fro
 | Item | Why it is not claimed complete |
 |---|---|
 | Dukascopy download from GitHub runner | Network/WAF availability can only be confirmed by running the workflow |
-| Supabase connection with the user's actual project key | Credentials are not included in this ZIP and must remain GitHub secrets |
 | Headway login and live quote | Requires the user's demo credentials and terminal access |
 | Native Headway 500-bar decoder | Still not proven; Dukascopy supplies the historical bootstrap fallback |
 | Headway order selectors and broker confirmation | Must be verified against the actual demo terminal; code cannot prove a broker fill offline |
 | Automatic position close | Must be verified by a live demo run and broker-side evidence |
-| End-to-end autonomous run | Requires a successful GitHub Actions run with the user's secrets |
+| End-to-end autonomous run | Requires a successful GitHub Actions run with the user's Headway demo secrets |
+| State cache durability | GitHub Actions cache is not a transactional database and can be evicted; missing audit state stops the workflow and requires reconciliation |
 
 ## Operational behavior
 
