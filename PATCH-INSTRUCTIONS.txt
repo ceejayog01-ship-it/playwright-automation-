@@ -1,0 +1,26 @@
+# Yahoo Finance + Headway update-only patch
+
+Repository: `ceejayog01-ship-it/playwright-automation-`
+
+Included:
+- `scripts/bootstrap_yfinance.py` — Yahoo Finance EURUSD historical bootstrap.
+- `bridge/tests/test_yfinance_bootstrap.py` — parser and quality tests.
+- `apply_yfinance_headway_patch.py` — patches existing login, cycle script, workflow and installed requirements file.
+- `tse-reference/tse-mt5-integration/requirements.txt` — updated dependency file.
+
+Copy the archive contents into the repository root, then run:
+`python apply_yfinance_headway_patch.py`
+
+The patch script fails closed if the expected audited source blocks are missing. Review the diff before committing.
+
+Behavior:
+- Headway remains live quote source, broker connection and execution provider.
+- Yahoo `EURUSD=X` is historical-only, using 15m bars combined into M30 only when both halves exist.
+- Forming/incomplete candles are discarded; no synthetic candles are made; existing Headway rows are never overwritten.
+- 500 validated M30 candles remain required before scan and order placement.
+- Demo execution remains enabled (`ALLOW_ORDERS=yes`, `BRIDGE_REAL_EXECUTION=true`), max one order per cycle. This allows execution; it does not guarantee a signal or order.
+- Removes the exact visible server-label gate only. Keeps demo URL/entry validation and post-login authenticated terminal-host/workspace checks.
+- No strategy files changed, no live-account execution, no trailing stop changes.
+- No Headway WebSocket implementation is included; existing Headway browser terminal remains the live source until a verified WebSocket integration is built.
+
+The GitHub connector denied branch creation with 403, so this patch is NOT committed or deployed. After applying, run tests and Market Cycle. A green workflow is not proof of a trade; verify an actual Headway/MT5 position or deal ticket.
