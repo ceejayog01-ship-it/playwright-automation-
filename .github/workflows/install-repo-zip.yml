@@ -1,4 +1,4 @@
-name: Install Repository ZIP
+name: Install Corrected Headway Repository
 
 on:
   workflow_dispatch:
@@ -11,39 +11,44 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout repository using existing token
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.REPO_WORKFLOW_TOKEN || github.token }}
           persist-credentials: true
 
+      # 2. Verify the new ZIP exists
       - name: Verify ZIP file
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="yfinance-headway-full-repo.zip"
+          ZIP_FILE="yfinance-headway-corrected-full-repo.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "::error::ZIP file not found in repository root."
+            echo "Expected: $ZIP_FILE"
             exit 1
           fi
 
-          echo "ZIP file found."
+          echo "Corrected repository ZIP found."
 
-      - name: Extract ZIP
+      # 3. Extract ZIP
+      - name: Extract corrected repository
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p /tmp/repo-extract
 
-          unzip -q yfinance-headway-full-repo.zip \
+          unzip -q yfinance-headway-corrected-full-repo.zip \
             -d /tmp/repo-extract
 
           echo "ZIP extracted successfully."
 
-      - name: Install files into repository root
+      # 4. Verify the ZIP structure
+      - name: Verify extracted repository
         shell: bash
         run: |
           set -euo pipefail
@@ -51,33 +56,56 @@ jobs:
           SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
 
           if [ ! -d "$SOURCE_DIR" ]; then
-            echo "::error::Expected yfinance-headway-repo directory not found."
+            echo "::error::Expected repository folder not found."
 
-            echo "Extracted contents:"
+            echo "Extracted files:"
             find /tmp/repo-extract -maxdepth 3 -type f
 
             exit 1
           fi
 
-          cp -a "$SOURCE_DIR/." .
+          if [ ! -f "$SOURCE_DIR/requirements.txt" ]; then
+            echo "::error::requirements.txt is missing."
+            exit 1
+          fi
 
-          echo "Repository files installed."
+          if [ ! -f "$SOURCE_DIR/README.md" ]; then
+            echo "::error::README.md is missing."
+            exit 1
+          fi
 
-      - name: Remove ZIP
+          echo "Repository structure verified."
+
+      # 5. Install all files into repository root
+      - name: Install repository files
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -f yfinance-headway-full-repo.zip
+          SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
 
-          echo "ZIP removed."
+          cp -a "$SOURCE_DIR/." .
 
-      - name: Commit and push
+          echo "Repository files installed into root."
+
+      # 6. Remove uploaded ZIP
+      - name: Remove installation ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -f yfinance-headway-corrected-full-repo.zip
+
+          echo "Installation ZIP removed."
+
+      # 7. Commit and push
+      - name: Commit and push repository
         shell: bash
         run: |
           set -euo pipefail
 
           git config user.name "github-actions[bot]"
+
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -88,6 +116,6 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Install complete repository from ZIP"
+          git commit -m "Install corrected Headway repository"
 
           git push
