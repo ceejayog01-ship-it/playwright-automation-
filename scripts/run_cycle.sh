@@ -15,6 +15,22 @@ HW="$ROOT/headway/headway-mt5-web-automation"
 BR="$ROOT/bridge"
 WORK="$ROOT/work"
 mkdir -p "$WORK" "$HW/artifacts" "$ROOT/audit"
+# Remove stale result artifacts before this run. Never ingest a previous cycle's
+# auth/order/monitor JSON as if it were a current broker response.
+rm -f "$HW/artifacts/auth_result.json" \
+      "$HW/artifacts/order_result.json" \
+      "$HW/artifacts/strategy_order_result.json" \
+      "$HW/artifacts/position_monitor.json" \
+      "$HW/artifacts/managed_positions.json" \
+      "$WORK/strategy_order_result.json" \
+      "$WORK/position_monitor.json"
+
+# The frozen 51-strategy definitions are required inputs, not generated defaults.
+# Fail before login or market execution if the supplied recovery bundle omitted them.
+if [ ! -s "$TSE/data/strategies.json" ] || [ ! -s "$TSE/data/edges.json" ]; then
+  echo "::error::Frozen TSE strategy data missing: expected data/strategies.json and data/edges.json. Restore the original strategy files; do not substitute invented strategies."
+  exit 6
+fi
 # Never create a fresh deduplication/position ledger silently. The workflow must
 # restore it from cache or create the empty file only after explicit migration confirmation.
 if [ ! -f "$ROOT/audit/events.jsonl" ]; then
@@ -108,15 +124,30 @@ print(json.dumps(orders[$i]) if $i < len(orders) else '')
     echo "placing signal_id=$sid side=$side lots=$lots sl=$sl"
     SL_ARG=""
     [ -n "$sl" ] && [ "$sl" != "None" ] && SL_ARG="--sl $sl"
+    rm -f "$HW/artifacts/strategy_order_result.json"
     (cd "$HW" && npx ts-node src/index.ts --mode=strategy-order --execute \
         --signal-file "$WORK/one_signal.json" --signal-id "$sid" --side "$side" --lots "$lots" $SL_ARG) \
       > "$HW/artifacts/strategy-order-$sid.log" 2>&1 || worst 1
     cat "$HW/artifacts/strategy-order-$sid.log" || true
-    if [ -f "$HW/artifacts/strategy_order_result.json" ]; then
+    if [ -s "$HW/artifacts/strategy_order_result.json" ] && python - "$HW/artifacts/strategy_order_result.json" "$sid" <<'PY'
+import json, sys
+try:
+    r=json.load(open(sys.argv[1], encoding="utf-8"))
+    valid=(isinstance(r,dict) and r.get("schema")==1 and r.get("kind")=="STRATEGY_ORDER"
+           and r.get("signal_id")==sys.argv[2] and isinstance(r.get("outcome"),str)
+           and isinstance(r.get("execute"),bool) and isinstance(r.get("opened_confirmed"),bool))
+except Exception:
+    valid=False
+raise SystemExit(0 if valid else 1)
+PY
+    then
       cp "$HW/artifacts/strategy_order_result.json" "$WORK/strategy_order_result.json"
       py tsebridge.cycle --signals "$WORK/none.json" --auth "$AUTH" \
          --audit-dir "$ROOT/audit" --run-id "$RUN-fill-$sid" \
-         --order-result "$WORK/strategy_order_result.json" --real-execution || true
+         --order-result "$WORK/strategy_order_result.json" --real-execution || worst $?
+    else
+      echo "::error::Fresh strategy-order result missing or invalid; it was not ingested."
+      worst 1
     fi
   done
 elif [ -f "$PENDING" ]; then

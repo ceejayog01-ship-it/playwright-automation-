@@ -10,7 +10,7 @@
     "order": "ts-node src/index.ts --mode=order",
     "install-browsers": "npx playwright install chromium",
     "monitor": "ts-node src/index.ts --mode=monitor",
-    "test": "ts-node test/policy.test.ts && ts-node test/parsers.test.ts && ts-node test/order-guard.test.ts && ts-node test/strategy-order-guard.test.ts && ts-node test/monitor-policy.test.ts && ts-node test/no-market-data.test.ts",
+    "test": "ts-node test/policy.test.ts && ts-node test/login-contract.test.ts && ts-node test/parsers.test.ts && ts-node test/order-guard.test.ts && ts-node test/strategy-order-guard.test.ts && ts-node test/monitor-policy.test.ts && ts-node test/no-market-data.test.ts",
     "strategy-order": "ts-node src/index.ts --mode=strategy-order"
   },
   "dependencies": {

@@ -4,7 +4,7 @@ import { loadPolicy } from '../src/policy';
 
 process.env.ACCOUNT_MODE = 'demo';
 const policy = loadPolicy();
-const realPolicy = loadPolicy({ ACCOUNT_MODE: 'real', EXPECTED_SERVER_LABEL: 'Headway-Real' });
+const realPolicy = loadPolicy({ ACCOUNT_MODE: 'real' });
 const base = { signal_id: 's1', symbol: 'EURUSD', side: 'buy' as const, lots: 0.01, execute: false };
 
 assertStrategyOrderAllowed(policy, base, {});

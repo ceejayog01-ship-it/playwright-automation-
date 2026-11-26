@@ -110,7 +110,7 @@ async function main() {
       console.error('Login failed. Aborting.');
       process.exitCode = 1; return;
     }
-    writeAuthResult('verified', 'ok', policy.mode, rep?.server ?? policy.serverLabel, rep?.terminalHost ?? null, url);
+    writeAuthResult('verified', 'ok', policy.mode, null, rep?.terminalHost ?? null, url);
 
     if (o.mode === 'strategy-order') {
       const report = await runStrategyOrder(page, policy, strategyReq!);

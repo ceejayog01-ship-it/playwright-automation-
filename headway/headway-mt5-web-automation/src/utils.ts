@@ -73,10 +73,7 @@ export function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export function isDemoServer(serverText: string, blockedKeywords: string[]): boolean {
-  const lower = serverText.toLowerCase();
-  return !blockedKeywords.some((k) => lower.includes(k.toLowerCase()));
-}
+
 
 
 /** Save a screenshot and structured, credential-free diagnostics for login verification. */

@@ -64,6 +64,8 @@ jobs:
           set -euo pipefail
           required=(
             tse-reference/tse-mt5-integration/scan_once.py
+            tse-reference/tse-mt5-integration/data/strategies.json
+            tse-reference/tse-mt5-integration/data/edges.json
             bridge/tsebridge/common.py
             headway/headway-mt5-web-automation/src/login.ts
             headway/headway-mt5-web-automation/src/policy.ts

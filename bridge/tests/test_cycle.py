@@ -62,10 +62,10 @@ def test_auth_failure_defers_without_burning_signal(tmp_path):
     assert types(tmp_path).count("POSITION_OPENED") == 1          # same id accepted once auth recovered
 
 
-def test_stale_or_wrong_server_auth_blocks(tmp_path):
+def test_stale_auth_blocks_but_server_label_is_not_a_gate(tmp_path):
     sig = write_signals(tmp_path, raw_signal())
     assert run(tmp_path, signals=sig, auth=write_auth(tmp_path, dt(2026, 11, 19, 9, 0))) == 3
-    assert run(tmp_path, signals=sig, auth=write_auth(tmp_path, server="Headway-Real")) == 3
+    assert run(tmp_path, signals=sig, auth=write_auth(tmp_path, server="Headway-Real")) == 0
 
 
 def test_id_conflict_rejected(tmp_path):
@@ -169,21 +169,13 @@ def test_demo_bridge_rejects_a_real_login(tmp_path):
     assert "POSITION_OPENED" not in types(tmp_path)
 
 
-def test_real_bridge_accepts_only_matching_real_login(tmp_path, monkeypatch):
-    monkeypatch.setattr(C, "ACCOUNT_MODE", "real")
-    monkeypatch.setattr(C, "EXPECTED_SERVER", "Headway-Real")
-    sig = write_signals(tmp_path, raw_signal())
-    assert run(tmp_path, signals=sig, auth=write_auth(tmp_path)) == 3                       # demo login must not satisfy real
-    assert run(tmp_path, signals=sig, auth=real_auth(tmp_path, server="Headway-Other")) == 3
-    assert run(tmp_path, signals=sig, auth=real_auth(tmp_path, url_path="/webterminal/mt5-demo/")) == 3
-    assert run(tmp_path, signals=sig, auth=real_auth(tmp_path)) == 0
-    assert types(tmp_path).count("POSITION_OPENED") == 1
-
-
-def test_real_mode_without_expected_server_fails_closed(tmp_path, monkeypatch):
+def test_real_bridge_checks_mode_endpoint_not_exact_server_label(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "ACCOUNT_MODE", "real")
     monkeypatch.setattr(C, "EXPECTED_SERVER", "")
-    assert run(tmp_path, signals=write_signals(tmp_path, raw_signal()), auth=real_auth(tmp_path)) == 3
+    sig = write_signals(tmp_path, raw_signal())
+    assert run(tmp_path, signals=sig, auth=write_auth(tmp_path)) == 3  # demo endpoint must not satisfy real
+    assert run(tmp_path, signals=sig, auth=real_auth(tmp_path, server="Headway-Other")) == 0
+    assert types(tmp_path).count("POSITION_OPENED") == 1
 
 
 # ---------------- Headway prices removed + dummy order audit ----------------

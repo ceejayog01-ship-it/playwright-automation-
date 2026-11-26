@@ -3,7 +3,7 @@ import { loadPolicy } from '../src/policy';
 import { assertOrderAllowed, OrderGuardError, MAX_DUMMY_LOTS, orderExitCode } from '../src/order';
 
 const demo = loadPolicy({});
-const real = loadPolicy({ ACCOUNT_MODE: 'real', EXPECTED_SERVER_LABEL: 'Headway-Real' });
+const real = loadPolicy({ ACCOUNT_MODE: 'real' });
 const base = { symbol: 'EURUSD', side: 'buy' as const, lots: 0.01, execute: false, closeAfter: false };
 const fails = (fn: () => void, reason: string) => assert.throws(fn, (e: Error) => e instanceof OrderGuardError && e.message.startsWith(reason), reason);
 

@@ -81,12 +81,10 @@ jobs:
           R_URL: ${{ secrets.REAL_WEB_TERMINAL_URL }}
           R_LOGIN: ${{ secrets.REAL_MT5_LOGIN }}
           R_PASS: ${{ secrets.REAL_MT5_PASSWORD }}
-          R_LABEL: ${{ vars.EXPECTED_SERVER_LABEL }}
         run: |
           [[ "$LOTS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "lots must be numeric"; exit 1; }
           if [ "$ACCOUNT" = "real" ]; then
             test -n "$R_URL" && test -n "$R_LOGIN" && test -n "$R_PASS" || { echo "real mode needs REAL_WEB_TERMINAL_URL, REAL_MT5_LOGIN, REAL_MT5_PASSWORD"; exit 1; }
-            test -n "$R_LABEL" || { echo "real mode needs repository variable EXPECTED_SERVER_LABEL"; exit 1; }
           else
             test -n "$D_LOGIN" && test -n "$D_PASS" || { echo "demo mode needs MT5_LOGIN and MT5_PASSWORD"; exit 1; }
           fi
@@ -99,7 +97,6 @@ jobs:
           EXECUTE: ${{ inputs.execute }}
           CLOSE_AFTER: ${{ inputs.close_after }}
           ACCOUNT_MODE: ${{ inputs.account_mode }}
-          EXPECTED_SERVER_LABEL: ${{ vars.EXPECTED_SERVER_LABEL }}
           WEB_TERMINAL_URL: ${{ inputs.account_mode == 'real' && secrets.REAL_WEB_TERMINAL_URL || secrets.WEB_TERMINAL_URL }}
           MT5_LOGIN: ${{ inputs.account_mode == 'real' && secrets.REAL_MT5_LOGIN || secrets.MT5_LOGIN }}
           MT5_PASSWORD: ${{ inputs.account_mode == 'real' && secrets.REAL_MT5_PASSWORD || secrets.MT5_PASSWORD }}

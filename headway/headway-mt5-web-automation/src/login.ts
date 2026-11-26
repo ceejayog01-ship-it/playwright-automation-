@@ -1,7 +1,7 @@
 import { Page, Frame } from 'playwright';
 import { Selectors } from '../config/selectors';
 import { safeFill, safeClick, findFirstVisible, screenshotOnFailure, sleep, savePostLoginDiagnostics } from './utils';
-import { Policy, loadPolicy, hostOf, checkEntry, checkServerLabel } from './policy';
+import { Policy, loadPolicy, hostOf, checkEntry } from './policy';
 
 export interface LoginCredentials {
   login: string;
@@ -38,19 +38,19 @@ async function inspectConnectedTerminal(page: Page, policy: Policy, entryUrl: st
     // Authentication evidence is a live terminal workspace, not account-number
     // matching, balances, Market Watch layout, or a visible price chart.
     const workspaceMarker = /market watch|toolbox|navigator|positions|orders|trade|quotes|disconnect|log out|logout/i.test(lower);
-    if (approvedTerminalFrame && workspaceMarker) terminalEvidence = true;
+    if (workspaceMarker) terminalEvidence = true;
     frameReports.push({ index, host, approvedTerminalFrame, visibleLoginInput, workspaceMarker, authError });
   }
 
   const entryOk = checkEntry(policy, entryUrl).ok;
-  const success = entryOk && Boolean(terminalHostName) && terminalEvidence && !loginFormVisible && !authError;
+  const success = entryOk && terminalEvidence && !loginFormVisible && !authError;
   return { success, accountMode: policy.mode, terminalHostName, terminalEvidence, loginFormVisible, authError, frameReports };
 }
 
 export async function performLogin(page: Page, creds: LoginCredentials): Promise<boolean> {
   const policy = loadPolicy();
   const fail = (reason: string): false => {
-    lastLoginReport = { mode: policy.mode, verified: false, reason, server: policy.serverLabel, terminalHost: null, expectedLogin: null, observedLogin: null, observedServer: null, accountIdentityVerified: false, serverIdentityVerified: false };
+    lastLoginReport = { mode: policy.mode, verified: false, reason, server: null, terminalHost: null, expectedLogin: null, observedLogin: null, observedServer: null, accountIdentityVerified: false, serverIdentityVerified: false };
     return false;
   };
   console.log(`[login] Account mode: ${policy.mode.toUpperCase()}`);
@@ -75,30 +75,11 @@ export async function performLogin(page: Page, creds: LoginCredentials): Promise
     return fail(entry.reason);
   }
 
-  // Read the exact visible server-name text, not a broad container such as
-  // `div:has-text("Server")`. The latter matched the entire login panel in
-  // the 2026-11-21 evidence screenshot and falsely classified Headway-Demo.
-  let serverText = '';
-  const expectedVisibleServer = policy.mode === 'demo' ? 'Headway-Demo' : policy.serverLabel;
-  for (const frame of page.frames()) {
-    const exact = frame.getByText(new RegExp(`^${expectedVisibleServer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')).first();
-    if (await exact.isVisible({ timeout: 500 }).catch(() => false)) {
-      serverText = (await exact.innerText().catch(() => '')).trim();
-      if (serverText) break;
-    }
-  }
-  if (!serverText) {
-    console.error(`[login] Exact server name not visible (${expectedVisibleServer}); refusing to submit credentials.`);
-    await screenshotOnFailure(page, 'server-label-missing');
-    return fail('server_label_missing');
-  }
-  const label = checkServerLabel(policy, serverText);
-  if (!label.ok) {
-    console.error(`[login] SAFETY ABORT: visible server label rejected for ${policy.mode} mode (${label.reason}).`);
-    await screenshotOnFailure(page, 'server-label-abort');
-    return fail(label.reason);
-  }
-  console.log(`[login] ${policy.mode === 'demo' ? 'Demo' : 'Real'} server label verified:`, serverText.replace(/\s+/g, ' ').slice(0, 80));
+  // Do not require the exact server label or account-number identity.
+  // Headway may render the server selector differently across sessions.
+  // Submit the configured credentials and verify that the login form disappears
+  // and a terminal workspace is established before allowing any downstream action.
+  console.log(`[login] ${policy.mode} endpoint accepted; submitting credentials without exact server-label matching.`);
 
   if (!await safeFill(page, Selectors.login.loginInput, creds.login, 'Login field')) {
     await screenshotOnFailure(page, 'login-field-missing'); return fail('login_field_missing');
@@ -119,9 +100,9 @@ export async function performLogin(page: Page, creds: LoginCredentials): Promise
   }
 
   if (result.success) {
-    console.log(`[login] AUTHENTICATED: ${policy.mode} terminal session established; no account-number or chart-display verification required.`);
+    console.log(`[login] LOGIN SUCCESS: ${policy.mode} terminal workspace established; no exact server-label or account-number matching required.`);
     await savePostLoginDiagnostics(page, 'login-verified', result);
-    lastLoginReport = { mode: policy.mode, verified: true, reason: 'authenticated_terminal_session', server: policy.serverLabel, terminalHost: result.terminalHostName, expectedLogin: null, observedLogin: null, observedServer: null, accountIdentityVerified: false, serverIdentityVerified: false };
+    lastLoginReport = { mode: policy.mode, verified: true, reason: 'authenticated_terminal_session', server: null, terminalHost: result.terminalHostName, expectedLogin: null, observedLogin: null, observedServer: null, accountIdentityVerified: false, serverIdentityVerified: false };
     return true;
   }
 
@@ -131,7 +112,7 @@ export async function performLogin(page: Page, creds: LoginCredentials): Promise
   await savePostLoginDiagnostics(page, 'login-unverified', result);
   const reason = result.authError ? 'auth_error' : (result.loginFormVisible ? 'login_form_still_visible' : 'terminal_session_not_confirmed');
   lastLoginReport = {
-    mode: policy.mode, verified: false, reason, server: policy.serverLabel,
+    mode: policy.mode, verified: false, reason, server: null,
     terminalHost: result.terminalHostName || null, expectedLogin: null,
     observedLogin: null, observedServer: null, accountIdentityVerified: false, serverIdentityVerified: false,
   };

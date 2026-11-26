@@ -40,13 +40,7 @@ export const Selectors = {
       'button.green, button[style*="green"]',
       '[role="button"]:has-text("Connect")',
     ],
-    // Server is shown as text "Headway-Demo" in your screenshot
-    // Exact server-name selectors only. Never use a broad container selector
-    // such as div:has-text("Server"), which can match the entire login panel.
-    serverText: [
-      'text=Headway-Demo',
-      'text=/^Headway-Demo$/i',
-    ],
+
   },
 
   // ---------- Post-login / Trading UI ----------

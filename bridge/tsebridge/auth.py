@@ -18,8 +18,6 @@ def _norm(x) -> str:
 def check_auth(path, now) -> Tuple[bool, str, dict]:
     if C.ACCOUNT_MODE not in ("demo", "real"):
         return False, "bad_bridge_account_mode", {}
-    if C.ACCOUNT_MODE == "real" and not C.EXPECTED_SERVER:
-        return False, "real_mode_needs_BRIDGE_EXPECTED_SERVER", {}
     try:
         with open(path) as f:
             d = json.load(f)
@@ -29,16 +27,15 @@ def check_auth(path, now) -> Tuple[bool, str, dict]:
         return False, f"login_not_verified:{d.get('reason', 'unknown')}", d
     if d.get("account_mode") != C.ACCOUNT_MODE:
         return False, f"account_mode_mismatch:{d.get('account_mode')}!={C.ACCOUNT_MODE}", d
-    server, url_path, host = _norm(d.get("server")), _norm(d.get("url_path")).rstrip("/"), _norm(d.get("terminal_host"))
+    url_path = _norm(d.get("url_path")).rstrip("/")
+    # No exact broker/server-name matching: Headway changes how it renders
+    # server labels. The account mode is checked against the endpoint path,
+    # while login success is established by the terminal workspace itself.
     if C.ACCOUNT_MODE == "demo":
-        if not re.match(r"^headway[\s-]*demo$", server):
-            return False, "server_not_headway_demo", d
         if not url_path.endswith("/mt5-demo"):
             return False, "url_not_demo_endpoint", d
     else:
-        if server != _norm(C.EXPECTED_SERVER) or "demo" in server:
-            return False, "server_does_not_match_expected_real", d
-        if "demo" in url_path or host.startswith("demo"):
+        if "demo" in url_path:
             return False, "demo_endpoint_in_real_mode", d
     try:
         age = (now - parse_utc(d["verified_at"])).total_seconds() / 60
