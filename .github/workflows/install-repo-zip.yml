@@ -1,62 +1,83 @@
 name: Install Repository ZIP
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
-  contents: write
+contents: write
 
 jobs:
-  install:
-    runs-on: ubuntu-latest
+install:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_TOKEN }}
-          persist-credentials: true
+steps:
+  # 1. Checkout repository using your existing token
+  - name: Checkout repository
+    uses: actions/checkout@v4
+    with:
+      token: ${{ secrets.REPO_WORKFLOW_TOKEN }}
+      persist-credentials: true
 
-      - name: Verify ZIP exists
-        run: |
-          if [ ! -f "yfinance-headway-full-repo.zip" ]; then
-            echo "ERROR: ZIP file not found in repository root."
-            exit 1
-          fi
+  # 2. Verify the ZIP exists
+  - name: Verify ZIP file
+    run: |
+      ZIP_FILE="yfinance-headway-full-repo.zip"
 
-      - name: Extract ZIP into repository root
-        run: |
-          mkdir -p /tmp/repo-extract
+      if [ ! -f "$ZIP_FILE" ]; then
+        echo "ERROR: $ZIP_FILE not found in repository root."
+        echo "Upload the ZIP to the root of your repository."
+        exit 1
+      fi
 
-          unzip -q yfinance-headway-full-repo.zip \
-            -d /tmp/repo-extract
+      echo "ZIP file found."
 
-          SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
+  # 3. Extract ZIP into temporary directory
+  - name: Extract repository ZIP
+    run: |
+      mkdir -p /tmp/repo-extract
 
-          if [ ! -d "$SOURCE_DIR" ]; then
-            echo "ERROR: Expected ZIP folder not found."
-            exit 1
-          fi
+      unzip -q yfinance-headway-full-repo.zip \
+        -d /tmp/repo-extract
 
-          cp -a "$SOURCE_DIR/." .
+      echo "ZIP extracted successfully."
 
-      - name: Remove installation ZIP
-        run: |
-          rm -f yfinance-headway-full-repo.zip
+  # 4. Install ZIP contents directly into repository root
+  - name: Install repository files
+    run: |
+      SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
 
-      - name: Commit and push installed repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+      if [ ! -d "$SOURCE_DIR" ]; then
+        echo "ERROR: Expected yfinance-headway-repo folder not found."
+        echo "ZIP contents:"
+        find /tmp/repo-extract -maxdepth 3 -type f
+        exit 1
+      fi
 
-          git add -A
+      cp -a "$SOURCE_DIR/." .
 
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
+      echo "Repository files installed into root."
 
-          git commit -m "Install complete repository from ZIP"
+  # 5. Remove uploaded ZIP
+  - name: Remove installation ZIP
+    run: |
+      rm -f yfinance-headway-full-repo.zip
 
-          git push
+      echo "Installation ZIP removed."
+
+  # 6. Commit and push installed files
+  - name: Commit and push changes
+    run: |
+      git config user.name "github-actions[bot]"
+      git config user.email \
+        "41898282+github-actions[bot]@users.noreply.github.com"
+
+      git add -A
+
+      if git diff --cached --quiet; then
+        echo "No changes to commit."
+        exit 0
+      fi
+
+      git commit -m "Install complete repository from ZIP"
+
+      git push
