@@ -1,0 +1,193 @@
+name: Install Corrected Headway Repository
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # 1. Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.REPO_WORKFLOW_TOKEN || github.token }}
+          persist-credentials: true
+
+      # 2. Verify ZIP
+      - name: Verify updated ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="yfinance-headway-full-repo-2026-11-26-restored-data.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::Updated repository ZIP not found."
+            exit 1
+          fi
+
+          echo "Updated repository ZIP found."
+
+      # 3. Extract ZIP
+      - name: Extract updated repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/repo-extract
+
+          unzip -q \
+            yfinance-headway-full-repo-2026-11-26-restored-data.zip \
+            -d /tmp/repo-extract
+
+          echo "Extraction completed."
+
+      # 4. Verify repository structure
+      - name: Verify repository structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
+
+          if [ ! -d "$SOURCE_DIR" ]; then
+            echo "::error::Expected repository directory missing."
+            find /tmp/repo-extract -maxdepth 4 -type f
+            exit 1
+          fi
+
+          REQUIRED_FILES=(
+            "README.md"
+            "requirements.txt"
+            "run_cycle.sh"
+            "bridge/tsebridge/cycle.py"
+            "tse-reference/tse-mt5-integration/states/strategy_eval.py"
+            "tse-reference/tse-mt5-integration/data/strategies.json"
+            "tse-reference/tse-mt5-integration/data/edges.json"
+          )
+
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$SOURCE_DIR/$FILE" ]; then
+              echo "::error::Missing required file: $FILE"
+              exit 1
+            fi
+          done
+
+          echo "All required files verified."
+
+      # 5. Validate recovered JSON files
+      - name: Validate strategy and edge JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("/tmp/repo-extract/yfinance-headway-repo")
+          data = root / "tse-reference/tse-mt5-integration/data"
+
+          strategies_path = data / "strategies.json"
+          edges_path = data / "edges.json"
+
+          with strategies_path.open() as f:
+              strategies = json.load(f)
+
+          with edges_path.open() as f:
+              edges = json.load(f)
+
+          print("strategies.json: valid JSON")
+          print("edges.json: valid JSON")
+
+          print("Strategies type:", type(strategies).__name__)
+          print("Edges type:", type(edges).__name__)
+          PY
+
+          echo "JSON validation passed."
+
+      # 6. Install complete repository
+      - name: Replace existing repository files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
+
+          echo "Starting full repository replacement."
+
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='yfinance-headway-full-repo-2026-11-26-restored-data.zip' \
+            --exclude='.github/workflows/install-corrected-headway.yml' \
+            "$SOURCE_DIR/" ./
+
+          echo "Full repository replacement completed."
+
+      # 7. Verify installed files
+      - name: Verify installed repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="tse-reference/tse-mt5-integration/data"
+
+          test -f "$BASE/strategies.json"
+          test -f "$BASE/edges.json"
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          base = Path("tse-reference/tse-mt5-integration/data")
+
+          for name in ("strategies.json", "edges.json"):
+              with (base / name).open() as f:
+                  json.load(f)
+              print(f"PASS: {name}")
+
+          PY
+
+          echo "Installed repository verification passed."
+
+      # 8. Remove uploaded ZIP
+      - name: Remove installation ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -f yfinance-headway-full-repo-2026-11-26-restored-data.zip
+
+          echo "Installation ZIP removed."
+
+      # 9. Commit and push
+      - name: Commit and push repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Install updated Headway repository with restored TSE data"
+
+          git push
+
+          echo "Repository successfully updated."
