@@ -1,83 +1,93 @@
 name: Install Repository ZIP
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: write
+  contents: write
 
 jobs:
-install:
-runs-on: ubuntu-latest
+  install:
+    runs-on: ubuntu-latest
 
-steps:
-  # 1. Checkout repository using your existing token
-  - name: Checkout repository
-    uses: actions/checkout@v4
-    with:
-      token: ${{ secrets.REPO_WORKFLOW_TOKEN }}
-      persist-credentials: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.REPO_WORKFLOW_TOKEN || github.token }}
+          persist-credentials: true
 
-  # 2. Verify the ZIP exists
-  - name: Verify ZIP file
-    run: |
-      ZIP_FILE="yfinance-headway-full-repo.zip"
+      - name: Verify ZIP file
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      if [ ! -f "$ZIP_FILE" ]; then
-        echo "ERROR: $ZIP_FILE not found in repository root."
-        echo "Upload the ZIP to the root of your repository."
-        exit 1
-      fi
+          ZIP_FILE="yfinance-headway-full-repo.zip"
 
-      echo "ZIP file found."
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::ZIP file not found in repository root."
+            exit 1
+          fi
 
-  # 3. Extract ZIP into temporary directory
-  - name: Extract repository ZIP
-    run: |
-      mkdir -p /tmp/repo-extract
+          echo "ZIP file found."
 
-      unzip -q yfinance-headway-full-repo.zip \
-        -d /tmp/repo-extract
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      echo "ZIP extracted successfully."
+          mkdir -p /tmp/repo-extract
 
-  # 4. Install ZIP contents directly into repository root
-  - name: Install repository files
-    run: |
-      SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
+          unzip -q yfinance-headway-full-repo.zip \
+            -d /tmp/repo-extract
 
-      if [ ! -d "$SOURCE_DIR" ]; then
-        echo "ERROR: Expected yfinance-headway-repo folder not found."
-        echo "ZIP contents:"
-        find /tmp/repo-extract -maxdepth 3 -type f
-        exit 1
-      fi
+          echo "ZIP extracted successfully."
 
-      cp -a "$SOURCE_DIR/." .
+      - name: Install files into repository root
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      echo "Repository files installed into root."
+          SOURCE_DIR="/tmp/repo-extract/yfinance-headway-repo"
 
-  # 5. Remove uploaded ZIP
-  - name: Remove installation ZIP
-    run: |
-      rm -f yfinance-headway-full-repo.zip
+          if [ ! -d "$SOURCE_DIR" ]; then
+            echo "::error::Expected yfinance-headway-repo directory not found."
 
-      echo "Installation ZIP removed."
+            echo "Extracted contents:"
+            find /tmp/repo-extract -maxdepth 3 -type f
 
-  # 6. Commit and push installed files
-  - name: Commit and push changes
-    run: |
-      git config user.name "github-actions[bot]"
-      git config user.email \
-        "41898282+github-actions[bot]@users.noreply.github.com"
+            exit 1
+          fi
 
-      git add -A
+          cp -a "$SOURCE_DIR/." .
 
-      if git diff --cached --quiet; then
-        echo "No changes to commit."
-        exit 0
-      fi
+          echo "Repository files installed."
 
-      git commit -m "Install complete repository from ZIP"
+      - name: Remove ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      git push
+          rm -f yfinance-headway-full-repo.zip
+
+          echo "ZIP removed."
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Install complete repository from ZIP"
+
+          git push
